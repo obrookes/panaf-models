@@ -18,8 +18,12 @@ class ActionClassifier(pl.LightningModule):
         self.spatial_model = ResNet50()
         self.dense_model = ResNet50()
 
+        # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
+
+        # Validation metrics
         self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
+        self.per_class_accuracy = torchmetrics.Accuracy(num_classes=9, average="macro")
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -77,13 +81,16 @@ class ActionClassifier(pl.LightningModule):
             logger=False,
             on_epoch=True,
             on_step=False,
-            prog_bar=True,
+            prog_bar=False,
         )
+
+        per_class_acc = self.per_class_accuracy(pred, y)
+
         return {"loss": loss}
 
     def validation_epoch_end(self, outputs):
 
-        # Log epoch acc
+        # Log top-1 acc per epoch
         top1_acc = self.top1_val_accuracy.compute()
         self.log(
             "val_top1_acc_epoch",
@@ -94,15 +101,15 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        # Log epoch loss
-        loss = torch.stack([x["loss"] for x in outputs]).mean()
+        # Log per class acc per epoch
+        per_class_acc = self.per_class_accuracy.compute()
         self.log(
-            "val_loss_epoch",
-            loss,
+            "val_per_class_acc",
+            per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
-            prog_bar=False,
+            prog_bar=True,
         )
 
     def configure_optimizers(self):
@@ -141,7 +148,7 @@ def main():
         )
     else:
         trainer = pl.Trainer(
-            max_epochs=cfg.getint("trainer", "max_epochs"), fast_dev_run=5
+            max_epochs=cfg.getint("trainer", "max_epochs"), fast_dev_run=10
         )
     trainer.fit(model=model, datamodule=data_module)
 
