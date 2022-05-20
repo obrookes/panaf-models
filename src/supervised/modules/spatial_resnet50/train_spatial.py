@@ -4,6 +4,7 @@ import configparser
 import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50
 
@@ -67,7 +68,6 @@ class ActionClassifier(pl.LightningModule):
         loss = F.cross_entropy(spatial_pred, y)
 
         top1_val_acc = self.top1_val_accuracy(spatial_pred, y)
-        per_class_acc = self.per_class_accuracy(spatial_pred, y)
 
         self.log(
             "top1_val_acc",
@@ -126,6 +126,7 @@ def main():
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
     )
+    wand_logger = WandbLogger(offline=True)
 
     if cfg.getboolean("remote", "slurm"):
         trainer = pl.Trainer(
@@ -134,6 +135,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            logger=wand_logger,
         )
     else:
         trainer = pl.Trainer(
