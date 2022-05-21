@@ -20,10 +20,14 @@ class ActionClassifier(pl.LightningModule):
 
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-
+        self.train_per_class_accuracy = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
         # Validation metrics
         self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.per_class_accuracy = torchmetrics.Accuracy(num_classes=9, average="macro")
+        self.val_per_class_accuracy = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -31,7 +35,9 @@ class ActionClassifier(pl.LightningModule):
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         pred = (spatial_pred + dense_pred) / 2
         loss = F.cross_entropy(pred, y)
+
         top1_train_acc = self.top1_train_accuracy(pred, y)
+        per_class_acc = self.train_per_class_accuracy(pred, y)
 
         self.log(
             "top1_train_acc",
@@ -49,6 +55,17 @@ class ActionClassifier(pl.LightningModule):
         top1_acc = self.top1_train_accuracy.compute()
         self.log(
             "train_top1_acc_epoch",
+            top1_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+        )
+
+        # Log epoch acc
+        train_per_class_acc = self.train_per_class_accuracy.compute()
+        self.log(
+            "train_per_class_acc_epoch",
             top1_acc,
             logger=True,
             on_epoch=True,
@@ -84,7 +101,7 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=False,
         )
 
-        per_class_acc = self.per_class_accuracy(pred, y)
+        val_per_class_acc = self.val_per_class_accuracy(pred, y)
 
         return {"loss": loss}
 
@@ -102,10 +119,10 @@ class ActionClassifier(pl.LightningModule):
         )
 
         # Log per class acc per epoch
-        per_class_acc = self.per_class_accuracy.compute()
+        val_per_class_acc = self.val_per_class_accuracy.compute()
         self.log(
             "val_per_class_acc",
-            per_class_acc,
+            val_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -148,7 +165,8 @@ def main():
         )
     else:
         trainer = pl.Trainer(
-            max_epochs=cfg.getint("trainer", "max_epochs"), fast_dev_run=10
+            max_epochs=cfg.getint("trainer", "max_epochs"),
+            fast_dev_run=5
         )
     trainer.fit(model=model, datamodule=data_module)
 
