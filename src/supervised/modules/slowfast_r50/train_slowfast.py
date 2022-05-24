@@ -70,7 +70,13 @@ class ActionClassifier(pl.LightningModule):
 
         x, y = batch
         slow = x["spatial_sample"].permute(0, 2, 1, 3, 4)
-        fast = uniform_temporal_subsample(slow, 8, 2)
+
+        t = slow.shape[2]
+        assert 8 > 0 and t > 0
+        # Sample by nearest neighbor interpolation if num_samples > t.
+        indices = torch.linspace(0, t - 1, 8)
+        indices = torch.clamp(indices, 0, t - 1).long()
+        fast = torch.index_select(slow, 2, indices)
 
         pred = self.slowfast([fast, slow])
         loss = F.cross_entropy(pred, y)
