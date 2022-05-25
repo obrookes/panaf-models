@@ -19,7 +19,7 @@ class ActionClassifier(pl.LightningModule):
         self.spatial_model = ResNet50()
         self.dense_model = ResNet50()
         self.temporal_model = TemporalResNet50()
-        
+
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
         self.train_per_class_accuracy = torchmetrics.Accuracy(

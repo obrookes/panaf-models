@@ -17,10 +17,16 @@ class ActionClassifier(pl.LightningModule):
 
         self.slowfast = SlowFast50()
 
-        print(self.slowfast)
-
+        # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
+        self.train_per_class_accuracy = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
+        # Validation metrics
         self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
+        self.val_per_class_accuracy = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
 
     def training_step(self, batch, batch_idx):
 
@@ -30,7 +36,9 @@ class ActionClassifier(pl.LightningModule):
 
         pred = self.slowfast([fast, slow])
         loss = F.cross_entropy(pred, y)
+
         top1_train_acc = self.top1_train_accuracy(pred, y)
+        per_class_acc = self.train_per_class_accuracy(pred, y)
 
         self.log(
             "top1_train_acc",
@@ -38,7 +46,7 @@ class ActionClassifier(pl.LightningModule):
             logger=False,
             on_epoch=False,
             on_step=True,
-            prog_bar=True,
+            prog_bar=False,
         )
         return {"loss": loss}
 
@@ -49,6 +57,17 @@ class ActionClassifier(pl.LightningModule):
         self.log(
             "train_top1_acc_epoch",
             top1_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+        )
+
+        # Log per class epoch acc
+        train_per_class_acc = self.train_per_class_accuracy.compute()
+        self.log(
+            "train_per_class_acc_epoch",
+            train_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -70,9 +89,12 @@ class ActionClassifier(pl.LightningModule):
         x, y = batch
         slow = x["spatial_sample"].permute(0, 2, 1, 3, 4)
         fast = self.uniform_temporal_subsample(x=slow, temporal_dim=2, num_samples=8)
+
         pred = self.slowfast([fast, slow])
         loss = F.cross_entropy(pred, y)
+
         top1_val_acc = self.top1_val_accuracy(pred, y)
+        per_class_acc = self.val_per_class_accuracy(pred, y)
 
         self.log(
             "top1_val_acc",
@@ -80,7 +102,7 @@ class ActionClassifier(pl.LightningModule):
             logger=False,
             on_epoch=True,
             on_step=False,
-            prog_bar=True,
+            prog_bar=False,
         )
         return {"loss": loss}
 
@@ -97,15 +119,15 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        # Log epoch loss
-        loss = torch.stack([x["loss"] for x in outputs]).mean()
+        # Log per class epoch acc
+        val_per_class_acc = self.val_per_class_accuracy.compute()
         self.log(
-            "val_loss_epoch",
-            loss,
+            "val_per_class_acc_epoch",
+            val_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
-            prog_bar=False,
+            prog_bar=True,
         )
 
     def configure_optimizers(self):
@@ -155,6 +177,7 @@ def main():
         trainer = pl.Trainer(
             gpus=cfg.getint("trainer", "gpus"),
             num_nodes=cfg.getint("trainer", "num_nodes"),
+            strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
             fast_dev_run=5,
