@@ -6,7 +6,10 @@ import pytorch_lightning as pl
 from torch import nn
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import SoftmaxEmbedderResNet50
+from src.supervised.models import (
+    SoftmaxEmbedderResNet50,
+    TemporalSoftmaxEmbedderResNet50,
+)
 from pytorch_metric_learning.miners import TripletMarginMiner
 from miners import RandomNegativeTripletSelector
 from losses import OnlineReciprocalTripletLoss
@@ -19,7 +22,10 @@ class ActionClassifier(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        self.embedder = SoftmaxEmbedderResNet50()
+        self.rgb_embedder = SoftmaxEmbedderResNet50()
+        self.dense_embedder = SoftmaxEmbedderResNet50()
+        self.flow_embedder = TemporalSoftmaxEmbedderResNet50()
+
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
         self.triplet_miner = TripletMarginMiner(margin=0.1, type_of_triplets="easy")
@@ -38,11 +44,20 @@ class ActionClassifier(pl.LightningModule):
             num_classes=9, average="macro"
         )
 
+    def forward(self, x):
+        r_emb, r_pred = self.rgb_embedder(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        d_emb, d_pred = self.dense_embedder(x["dense_sample"].permute(0, 2, 1, 3, 4))
+        f_emb, f_pred = self.flow_embedder(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
+        emb = (r_emb + d_emb + f_emb) / 3
+        pred = (r_pred + d_pred + f_pred) / 3
+
+        return emb, pred
+
     def training_step(self, batch, batch_idx):
 
         x, y = batch
-        embeddings, preds = self.embedder(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-
+        embeddings, preds = self(x)
         self.top1_train_accuracy(preds, y)
         self.train_per_class_accuracy(preds, y)
 
@@ -95,8 +110,9 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def validation_step(self, batch, batch_idx):
+
         x, y = batch
-        embeddings, preds = self.embedder(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        embeddings, preds = self(x)
 
         self.top1_val_accuracy(preds, y)
         self.val_per_class_accuracy(preds, y)
