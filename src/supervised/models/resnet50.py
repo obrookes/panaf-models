@@ -48,3 +48,26 @@ class TemporalResNet50(nn.Module):
     def forward(self, x):
         output = self.res_head(self.backbone(x))
         return self.fc(output)
+
+
+class SoftmaxEmbedderResNet50(nn.Module):
+    def __init__(self):
+
+        super().__init__()
+
+        # Load pretrained model
+        pretrained_model = torch.hub.load(
+            "facebookresearch/pytorchvideo:main", model="slow_r50", pretrained=True
+        )
+
+        self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+
+        self.res_head = create_res_basic_head(in_features=2048, out_features=128)
+        self.fc = nn.Linear(in_features=128, out_features=9)
+
+    def forward(self, x):
+        embedding = self.res_head(self.backbone(x))
+        pred = self.fc(embedding)
+        return embedding, pred
