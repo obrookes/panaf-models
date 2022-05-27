@@ -70,9 +70,6 @@ class TemporalSoftmaxEmbedderResNet50(nn.Module):
         )
 
         self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-
         self.res_head = create_res_basic_head(in_features=2048, out_features=128)
         self.fc = nn.Linear(in_features=128, out_features=9)
 
@@ -93,9 +90,6 @@ class SoftmaxEmbedderResNet50(nn.Module):
         )
 
         self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
-        for param in self.backbone.parameters():
-            param.requires_grad = False
-
         self.res_head = create_res_basic_head(in_features=2048, out_features=128)
         self.fc = nn.Linear(in_features=128, out_features=9)
 
