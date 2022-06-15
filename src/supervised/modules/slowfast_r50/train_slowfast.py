@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import ResNet50
+from src.supervised.models import SlowFast50
 
 
 class ActionClassifier(pl.LightningModule):
@@ -15,8 +15,7 @@ class ActionClassifier(pl.LightningModule):
 
         self.save_hyperparameters()
 
-        self.spatial_model = ResNet50()
-        self.dense_model = ResNet50()
+        self.slowfast = SlowFast50()
 
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
@@ -30,10 +29,12 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def training_step(self, batch, batch_idx):
+
         x, y = batch
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred) / 2
+        slow = x["spatial_sample"].permute(0, 2, 1, 3, 4)
+        fast = self.uniform_temporal_subsample(x=slow, temporal_dim=2, num_samples=8)
+
+        pred = self.slowfast([fast, slow])
         loss = F.cross_entropy(pred, y)
 
         top1_train_acc = self.top1_train_accuracy(pred, y)
@@ -45,7 +46,7 @@ class ActionClassifier(pl.LightningModule):
             logger=False,
             on_epoch=False,
             on_step=True,
-            prog_bar=True,
+            prog_bar=False,
         )
         return {"loss": loss}
 
@@ -62,11 +63,11 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        # Log epoch acc
+        # Log per class epoch acc
         train_per_class_acc = self.train_per_class_accuracy.compute()
         self.log(
             "train_per_class_acc_epoch",
-            top1_acc,
+            train_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -84,13 +85,16 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def validation_step(self, batch, batch_idx):
+
         x, y = batch
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred) / 2
+        slow = x["spatial_sample"].permute(0, 2, 1, 3, 4)
+        fast = self.uniform_temporal_subsample(x=slow, temporal_dim=2, num_samples=8)
+
+        pred = self.slowfast([fast, slow])
         loss = F.cross_entropy(pred, y)
 
         top1_val_acc = self.top1_val_accuracy(pred, y)
+        per_class_acc = self.val_per_class_accuracy(pred, y)
 
         self.log(
             "top1_val_acc",
@@ -100,14 +104,11 @@ class ActionClassifier(pl.LightningModule):
             on_step=False,
             prog_bar=False,
         )
-
-        val_per_class_acc = self.val_per_class_accuracy(pred, y)
-
         return {"loss": loss}
 
     def validation_epoch_end(self, outputs):
 
-        # Log top-1 acc per epoch
+        # Log epoch acc
         top1_acc = self.top1_val_accuracy.compute()
         self.log(
             "val_top1_acc_epoch",
@@ -118,10 +119,10 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        # Log per class acc per epoch
+        # Log per class epoch acc
         val_per_class_acc = self.val_per_class_accuracy.compute()
         self.log(
-            "val_per_class_acc",
+            "val_per_class_acc_epoch",
             val_per_class_acc,
             logger=True,
             on_epoch=True,
@@ -136,6 +137,15 @@ class ActionClassifier(pl.LightningModule):
             weight_decay=self.hparams.weight_decay,
         )
         return optimizer
+
+    def uniform_temporal_subsample(self, x, temporal_dim, num_samples):
+        t = x.shape[temporal_dim]
+        assert num_samples > 0 and t > 0
+        # Sample by nearest neighbor interpolation if num_samples > t.
+        indices = torch.linspace(0, t - 1, num_samples, device=self.device)
+        indices = torch.clamp(indices, 0, t - 1).long()
+        fast = torch.index_select(x, temporal_dim, indices)
+        return fast
 
 
 def main():
@@ -165,8 +175,12 @@ def main():
         )
     else:
         trainer = pl.Trainer(
+            gpus=cfg.getint("trainer", "gpus"),
+            num_nodes=cfg.getint("trainer", "num_nodes"),
+            strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
-            fast_dev_run=5
+            stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
 

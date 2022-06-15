@@ -6,7 +6,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import ResNet50
+from src.supervised.models import ResNet50, TemporalResNet50
+from pytorchvideo.models.resnet import create_resnet
 
 
 class ActionClassifier(pl.LightningModule):
@@ -17,6 +18,7 @@ class ActionClassifier(pl.LightningModule):
 
         self.spatial_model = ResNet50()
         self.dense_model = ResNet50()
+        self.temporal_model = TemporalResNet50()
 
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
@@ -33,7 +35,9 @@ class ActionClassifier(pl.LightningModule):
         x, y = batch
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred) / 2
+        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
+        pred = (spatial_pred + dense_pred + temporal_pred) / 3
         loss = F.cross_entropy(pred, y)
 
         top1_train_acc = self.top1_train_accuracy(pred, y)
@@ -87,7 +91,8 @@ class ActionClassifier(pl.LightningModule):
         x, y = batch
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred) / 2
+        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+        pred = (spatial_pred + dense_pred + temporal_pred) / 3
         loss = F.cross_entropy(pred, y)
 
         top1_val_acc = self.top1_val_accuracy(pred, y)
@@ -165,8 +170,7 @@ def main():
         )
     else:
         trainer = pl.Trainer(
-            max_epochs=cfg.getint("trainer", "max_epochs"),
-            fast_dev_run=5
+            max_epochs=cfg.getint("trainer", "max_epochs"), fast_dev_run=5
         )
     trainer.fit(model=model, datamodule=data_module)
 
