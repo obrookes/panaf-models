@@ -17,14 +17,16 @@ from sklearn.neighbors import KNeighborsClassifier
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay):
+    def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.rgb_embedder = SoftmaxEmbedderResNet50()
-        self.dense_embedder = SoftmaxEmbedderResNet50()
-        self.flow_embedder = TemporalSoftmaxEmbedderResNet50()
+        self.rgb_embedder = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone)
+        self.dense_embedder = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone)
+        self.flow_embedder = TemporalSoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone
+        )
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
@@ -186,6 +188,7 @@ def main():
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        freeze_backbone=cfg.getboolean("hparams", "freeze_backbone")
     )
     wand_logger = WandbLogger(offline=True)
 
