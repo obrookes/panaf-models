@@ -28,9 +28,8 @@ class ActionClassifier(pl.LightningModule):
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
-        self.triplet_miner = TripletMarginMiner(margin=0.1, type_of_triplets="easy")
-        self.selector = RandomNegativeTripletSelector(margin=0.2)
-        self.triplet_loss = OnlineReciprocalTripletLoss(self.selector)
+        self.triplet_miner = TripletMarginMiner(margin=0.2, type_of_triplets="easy")
+        self.triplet_loss = OnlineReciprocalTripletLoss()  # self.selector
         self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
