@@ -208,10 +208,9 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-    model = ActionClassifier(
-        lr=cfg.getfloat("hparams", "lr"),
-        weight_decay=cfg.getfloat("hparams", "weight_decay"),
-    )
+
+    model = ActionClassifier.load_from_checkpoint(cfg.get("trainer", "ckpt"))
+
     wand_logger = WandbLogger(offline=True)
 
     if cfg.getboolean("remote", "slurm"):
