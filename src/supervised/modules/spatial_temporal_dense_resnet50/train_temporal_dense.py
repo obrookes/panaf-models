@@ -4,21 +4,21 @@ import configparser
 import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50, TemporalResNet50
-from pytorchvideo.models.resnet import create_resnet
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay):
+    def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.spatial_model = ResNet50()
-        self.dense_model = ResNet50()
-        self.temporal_model = TemporalResNet50()
+        self.spatial_model = ResNet50(freeze_backbone=freeze_backbone)
+        self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
+        self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
 
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
@@ -153,24 +153,57 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
+
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
     )
+
     wand_logger = WandbLogger(offline=True)
 
-    if cfg.getboolean("remote", "slurm"):
+    val_top1_acc_checkpoint_callback = ModelCheckpoint(
+        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
+    )
+
+    val_per_class_acc_checkpoint_callback = ModelCheckpoint(
+        dirpath="checkpoints/val_per_class_acc",
+        monitor="val_per_class_acc_epoch",
+        mode="max",
+    )
+
+    if cfg.get("remote", "slurm") == "ssd" or cfg.get("remote", "slurm") == "hdd":
+        if not cfg.getboolean("mode", "test"):
+            trainer = pl.Trainer(
+                gpus=cfg.getint("trainer", "gpus"),
+                num_nodes=cfg.getint("trainer", "num_nodes"),
+                strategy=cfg.get("trainer", "strategy"),
+                max_epochs=cfg.getint("trainer", "max_epochs"),
+                stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                callbacks=[
+                    val_top1_acc_checkpoint_callback,
+                    val_per_class_acc_checkpoint_callback,
+                ],
+                logger=wand_logger,
+            )
+        else:
+            trainer = pl.Trainer(
+                gpus=cfg.getint("trainer", "gpus"),
+                num_nodes=cfg.getint("trainer", "num_nodes"),
+                strategy=cfg.get("trainer", "strategy"),
+                max_epochs=cfg.getint("trainer", "max_epochs"),
+                stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                logger=wand_logger,
+                fast_dev_run=10,
+            )
+    else:
         trainer = pl.Trainer(
             gpus=cfg.getint("trainer", "gpus"),
             num_nodes=cfg.getint("trainer", "num_nodes"),
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            logger=wand_logger,
-        )
-    else:
-        trainer = pl.Trainer(
-            max_epochs=cfg.getint("trainer", "max_epochs"), fast_dev_run=5
+            fast_dev_run=10,
         )
     trainer.fit(model=model, datamodule=data_module)
 
