@@ -18,20 +18,21 @@ from sklearn.neighbors import KNeighborsClassifier
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay):
+    def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.rgb_embedder = SoftmaxEmbedderResNet50()
-        self.dense_embedder = SoftmaxEmbedderResNet50()
-        self.flow_embedder = TemporalSoftmaxEmbedderResNet50()
+        self.rgb_embedder = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone)
+        self.dense_embedder = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone)
+        self.flow_embedder = TemporalSoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone
+        )
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
-        self.triplet_miner = TripletMarginMiner(margin=0.1, type_of_triplets="easy")
-        self.selector = RandomNegativeTripletSelector(margin=0.2)
-        self.triplet_loss = OnlineReciprocalTripletLoss(self.selector)
+        self.triplet_miner = TripletMarginMiner(margin=0.2, type_of_triplets="easy")
+        self.triplet_loss = OnlineReciprocalTripletLoss()
         self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
@@ -44,6 +45,9 @@ class ActionClassifier(pl.LightningModule):
         self.val_per_class_accuracy = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+
+    def assign_embedding_name(self, name):
+        self.embedding_filename = name
 
     def forward(self, x):
         r_emb, r_pred = self.rgb_embedder(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -192,7 +196,7 @@ class ActionClassifier(pl.LightningModule):
 
     def on_predict_epoch_end(self, results):
         np.savez(
-            "embeddings.npz",
+            self.embedding_filename,
             embeddings=self.outputs_embedding,
             labels=self.labels_embedding,
         )
@@ -202,26 +206,44 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
+    parser.add_argument("--split", type=str, required=True)
+    parser.add_argument("--prefix", type=str, required=True)
     args = parser.parse_args()
 
     cfg = configparser.ConfigParser()
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-
-    model = ActionClassifier.load_from_checkpoint(cfg.get("trainer", "ckpt"))
+    model = ActionClassifier(
+        lr=cfg.getfloat("hparams", "lr"),
+        weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
+    )
+    name = f"{args.prefix}_{args.split}_embeddings.npz"
+    model.assign_embedding_name(name)
 
     wand_logger = WandbLogger(offline=True)
 
-    if cfg.getboolean("remote", "slurm"):
-        trainer = pl.Trainer(
-            gpus=cfg.getint("trainer", "gpus"),
-            num_nodes=cfg.getint("trainer", "num_nodes"),
-            strategy=cfg.get("trainer", "strategy"),
-            max_epochs=cfg.getint("trainer", "max_epochs"),
-            stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            logger=wand_logger,
-        )
+    if cfg.get("remote", "slurm") == "ssd" or cfg.get("remote", "slurm") == "hdd":
+        if not cfg.getboolean("mode", "test"):
+            trainer = pl.Trainer(
+                gpus=cfg.getint("trainer", "gpus"),
+                num_nodes=cfg.getint("trainer", "num_nodes"),
+                strategy=cfg.get("trainer", "strategy"),
+                max_epochs=cfg.getint("trainer", "max_epochs"),
+                stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                logger=wand_logger,
+            )
+        else:
+            trainer = pl.Trainer(
+                gpus=cfg.getint("trainer", "gpus"),
+                num_nodes=cfg.getint("trainer", "num_nodes"),
+                strategy=cfg.get("trainer", "strategy"),
+                max_epochs=cfg.getint("trainer", "max_epochs"),
+                stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                logger=wand_logger,
+                fast_dev_run=10,
+            )
     else:
         trainer = pl.Trainer(
             gpus=cfg.getint("trainer", "gpus"),
@@ -229,10 +251,20 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            logger=wand_logger,
             fast_dev_run=5,
         )
+
     data_module.setup()
-    predictions = trainer.predict(model, dataloaders=data_module.train_dataloader())
+
+    if args.split == "train":
+        loader = data_module.train_dataloader()
+    elif args.split == "validation":
+        loader = data_module.val_dataloader()
+    elif args.split == "test":
+        loader = data_module.test_dataloader()
+
+    predictions = trainer.predict(model, dataloaders=loader)
 
 
 if __name__ == "__main__":
