@@ -214,11 +214,8 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-    model = ActionClassifier(
-        lr=cfg.getfloat("hparams", "lr"),
-        weight_decay=cfg.getfloat("hparams", "weight_decay"),
-        freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-    )
+    model = ActionClassifier.load_from_checkpoint(cfg.get("trainer", "ckpt"))
+
     name = f"{args.prefix}_{args.split}_embeddings.npz"
     model.assign_embedding_name(name)
 
