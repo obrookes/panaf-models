@@ -1,3 +1,5 @@
+import wandb
+import os
 import torch
 import argparse
 import configparser
@@ -10,9 +12,15 @@ from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50, TemporalResNet50
 
 
+os.environ["WANDB_API_KEY"] = "90100ae7e09e19ac19750449baf59b1441e9a5b8"
+os.environ["WANDB_MODE"] = "offline"
+
+
 class ActionClassifier(pl.LightningModule):
     def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
+
+        wandb.init()
 
         self.save_hyperparameters()
 
@@ -43,49 +51,22 @@ class ActionClassifier(pl.LightningModule):
         top1_train_acc = self.top1_train_accuracy(pred, y)
         per_class_acc = self.train_per_class_accuracy(pred, y)
 
-        self.log(
-            "top1_train_acc",
-            top1_train_acc,
-            logger=False,
-            on_epoch=False,
-            on_step=True,
-            prog_bar=True,
-        )
+        wandb.log({"top1_train_acc": top1_train_acc})
+
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
 
         # Log epoch acc
         top1_acc = self.top1_train_accuracy.compute()
-        self.log(
-            "train_top1_acc_epoch",
-            top1_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        wandb.log({"train_top1_acc_epoch": top1_acc})
 
         # Log epoch acc
         train_per_class_acc = self.train_per_class_accuracy.compute()
-        self.log(
-            "train_per_class_acc_epoch",
-            top1_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        wandb.log({"train_per_class_acc_epoch": train_per_class_acc})
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
-        self.log(
-            "train_loss_epoch",
-            loss,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=False,
-        )
+        wandb.log({"train_loss_epoch": loss})
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
@@ -96,16 +77,6 @@ class ActionClassifier(pl.LightningModule):
         loss = F.cross_entropy(pred, y)
 
         top1_val_acc = self.top1_val_accuracy(pred, y)
-
-        self.log(
-            "top1_val_acc",
-            top1_val_acc,
-            logger=False,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=False,
-        )
-
         val_per_class_acc = self.val_per_class_accuracy(pred, y)
 
         return {"loss": loss}
@@ -114,25 +85,11 @@ class ActionClassifier(pl.LightningModule):
 
         # Log top-1 acc per epoch
         top1_acc = self.top1_val_accuracy.compute()
-        self.log(
-            "val_top1_acc_epoch",
-            top1_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        wandb.log({"val_top1_acc_epoch": top1_acc})
 
         # Log per class acc per epoch
         val_per_class_acc = self.val_per_class_accuracy.compute()
-        self.log(
-            "val_per_class_acc",
-            val_per_class_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        wandb.log({"val_per_class_acc": val_per_class_acc})
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -160,8 +117,6 @@ def main():
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
     )
 
-    wand_logger = WandbLogger(offline=True)
-
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
     )
@@ -184,7 +139,6 @@ def main():
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
                 ],
-                logger=wand_logger,
             )
         else:
             trainer = pl.Trainer(
@@ -193,7 +147,6 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-                logger=wand_logger,
                 fast_dev_run=10,
             )
     else:
