@@ -42,7 +42,7 @@ class ActionClassifier(pl.LightningModule):
 
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
 
-        pred = pred + self.hparams.logit_adjustments
+        pred = pred + self.hparams.logit_adjustments.to(self.device)
         ce_loss = self.criterion(pred, y)
 
         loss_r = 0
@@ -104,7 +104,7 @@ class ActionClassifier(pl.LightningModule):
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
 
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        pred = pred + self.hparams.logit_adjustment
+        pred = pred + self.hparams.logit_adjustments.to(self.device)
 
         loss = F.cross_entropy(pred, y)
 
