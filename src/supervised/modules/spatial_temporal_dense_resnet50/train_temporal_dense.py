@@ -40,40 +40,26 @@ class ActionClassifier(pl.LightningModule):
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
         loss = F.cross_entropy(pred, y)
 
-        top1_train_acc = self.top1_train_accuracy(pred, y)
-        per_class_acc = self.train_per_class_accuracy(pred, y)
+        self.top1_train_accuracy(pred, y)
+        self.train_per_class_accuracy(pred, y)
 
-        self.log(
-            "top1_train_acc",
-            top1_train_acc,
-            logger=False,
-            on_epoch=False,
-            on_step=True,
-            prog_bar=True,
-        )
+        self.log("train_loss", loss)
+
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
 
-        # Log epoch acc
-        top1_acc = self.top1_train_accuracy.compute()
         self.log(
             "train_top1_acc_epoch",
-            top1_acc,
+            self.top1_train_accuracy,
             logger=True,
-            on_epoch=True,
-            on_step=False,
             prog_bar=True,
         )
 
-        # Log epoch acc
-        train_per_class_acc = self.train_per_class_accuracy.compute()
         self.log(
             "train_per_class_acc_epoch",
-            top1_acc,
+            self.train_per_class_accuracy,
             logger=True,
-            on_epoch=True,
-            on_step=False,
             prog_bar=True,
         )
 
@@ -82,8 +68,6 @@ class ActionClassifier(pl.LightningModule):
             "train_loss_epoch",
             loss,
             logger=True,
-            on_epoch=True,
-            on_step=False,
             prog_bar=False,
         )
 
@@ -92,45 +76,29 @@ class ActionClassifier(pl.LightningModule):
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
         loss = F.cross_entropy(pred, y)
 
-        top1_val_acc = self.top1_val_accuracy(pred, y)
-
-        self.log(
-            "top1_val_acc",
-            top1_val_acc,
-            logger=False,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=False,
-        )
-
-        val_per_class_acc = self.val_per_class_accuracy(pred, y)
+        self.top1_val_accuracy(pred, y)
+        self.val_per_class_accuracy(pred, y)
 
         return {"loss": loss}
 
     def validation_epoch_end(self, outputs):
 
-        # Log top-1 acc per epoch
-        top1_acc = self.top1_val_accuracy.compute()
         self.log(
             "val_top1_acc_epoch",
-            top1_acc,
+            self.top1_val_accuracy,
             logger=True,
-            on_epoch=True,
-            on_step=False,
             prog_bar=True,
         )
 
         # Log per class acc per epoch
-        val_per_class_acc = self.val_per_class_accuracy.compute()
         self.log(
             "val_per_class_acc",
-            val_per_class_acc,
+            self.val_per_class_accuracy,
             logger=True,
-            on_epoch=True,
-            on_step=False,
             prog_bar=True,
         )
 
