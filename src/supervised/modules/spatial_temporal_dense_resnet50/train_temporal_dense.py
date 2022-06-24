@@ -62,7 +62,7 @@ class ActionClassifier(pl.LightningModule):
             logger=True,
             prog_bar=True,
         )
-
+        
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
             "train_loss_epoch",
@@ -136,7 +136,7 @@ def main():
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc_epoch",
+        monitor="val_per_class_acc",
         mode="max",
     )
 
