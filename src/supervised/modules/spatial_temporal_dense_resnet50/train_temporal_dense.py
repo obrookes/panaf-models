@@ -54,6 +54,7 @@ class ActionClassifier(pl.LightningModule):
             self.top1_train_accuracy,
             logger=True,
             prog_bar=True,
+            rank_zero_only=True,
         )
 
         self.log(
@@ -61,14 +62,16 @@ class ActionClassifier(pl.LightningModule):
             self.train_per_class_accuracy,
             logger=True,
             prog_bar=True,
+            rank_zero_only=True,
         )
-        
+
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
             "train_loss_epoch",
             loss,
             logger=True,
             prog_bar=False,
+            rank_zero_only=True,
         )
 
     def validation_step(self, batch, batch_idx):
@@ -92,6 +95,7 @@ class ActionClassifier(pl.LightningModule):
             self.top1_val_accuracy,
             logger=True,
             prog_bar=True,
+            rank_zero_only=True,
         )
 
         # Log per class acc per epoch
@@ -100,6 +104,7 @@ class ActionClassifier(pl.LightningModule):
             self.val_per_class_accuracy,
             logger=True,
             prog_bar=True,
+            rank_zero_only=True,
         )
 
     def configure_optimizers(self):
@@ -169,9 +174,10 @@ def main():
             gpus=cfg.getint("trainer", "gpus"),
             num_nodes=cfg.getint("trainer", "num_nodes"),
             strategy=cfg.get("trainer", "strategy"),
+            devices=2,
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=10,
+            fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
 
