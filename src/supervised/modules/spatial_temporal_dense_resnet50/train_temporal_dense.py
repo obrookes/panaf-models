@@ -4,6 +4,7 @@ import configparser
 import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -20,6 +21,9 @@ class ActionClassifier(pl.LightningModule):
         self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
         self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
 
+        # Loss
+        self.ce_loss = nn.CrossEntropyLoss()
+
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
         self.train_per_class_accuracy = torchmetrics.Accuracy(
@@ -31,19 +35,22 @@ class ActionClassifier(pl.LightningModule):
             num_classes=9, average="macro"
         )
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch
+    def forward(self, x):
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
-
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        loss = F.cross_entropy(pred, y)
+        return pred
+
+    def training_step(self, batch, batch_idx):
+
+        x, y = batch
+        pred = self(x)
 
         self.top1_train_accuracy(pred, y)
         self.train_per_class_accuracy(pred, y)
 
-        self.log("train_loss", loss)
+        loss = self.ce_loss(pred, y)
 
         return {"loss": loss}
 
@@ -76,15 +83,12 @@ class ActionClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
-
-        pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        loss = F.cross_entropy(pred, y)
+        pred = self(x)
 
         self.top1_val_accuracy(pred, y)
         self.val_per_class_accuracy(pred, y)
+
+        loss = self.ce_loss(pred, y)
 
         return {"loss": loss}
 
@@ -174,7 +178,6 @@ def main():
             gpus=cfg.getint("trainer", "gpus"),
             num_nodes=cfg.getint("trainer", "num_nodes"),
             strategy=cfg.get("trainer", "strategy"),
-            devices=2,
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
             fast_dev_run=5,
