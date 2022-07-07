@@ -9,10 +9,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50, TemporalResNet50
+from class_balanced_loss import CB_loss
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone, logit_adjustments):
+    def __init__(self, lr, weight_decay, freeze_backbone, samples_per_class):
         super().__init__()
 
         self.save_hyperparameters()
@@ -20,8 +21,6 @@ class ActionClassifier(pl.LightningModule):
         self.spatial_model = ResNet50(freeze_backbone=freeze_backbone)
         self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
         self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
-
-        self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
@@ -39,30 +38,35 @@ class ActionClassifier(pl.LightningModule):
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        return pred + self.hparams.logit_adjustments.to(self.device)
+        return pred
 
     def training_step(self, batch, batch_idx):
         x, y = batch
         pred = self(x)
 
-        self.top1_train_accuracy(pred, y)
-        self.train_per_class_accuracy(pred, y)
+        top1_train_acc = self.top1_train_accuracy(pred, y)
+        per_class_acc = self.train_per_class_accuracy(pred, y)
 
-        ce_loss = self.ce_loss(pred, y)
-
-        loss_r = 0
-        for parameter in self.parameters():
-            loss_r += torch.sum(parameter**2)
-        loss = ce_loss + self.hparams.weight_decay * loss_r
+        loss = CB_loss(
+            labels=y,
+            logits=pred,
+            samples_per_cls=self.hparams.samples_per_class,
+            no_of_classes=9,
+            loss_type="focal",
+            beta=0.9999,
+            gamma=2.0,
+            device=self.device,
+        )
 
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
 
         # Log epoch acc
+        top1_acc = self.top1_train_accuracy.compute()
         self.log(
             "train_top1_acc_epoch",
-            self.top1_train_accuracy,
+            top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -70,9 +74,10 @@ class ActionClassifier(pl.LightningModule):
         )
 
         # Log epoch acc
+        train_per_class_acc = self.train_per_class_accuracy.compute()
         self.log(
             "train_per_class_acc_epoch",
-            self.train_per_class_accuracy,
+            train_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -93,10 +98,19 @@ class ActionClassifier(pl.LightningModule):
         x, y = batch
         pred = self(x)
 
-        loss = self.ce_loss(pred, y)
-
         self.top1_val_accuracy(pred, y)
         self.val_per_class_accuracy(pred, y)
+
+        loss = CB_loss(
+            labels=y,
+            logits=pred,
+            samples_per_cls=self.hparams.samples_per_class,
+            no_of_classes=9,
+            loss_type="focal",
+            beta=0.9999,
+            gamma=2.0,
+            device=self.device,
+        )
 
         return {"loss": loss}
 
@@ -142,14 +156,18 @@ def main():
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
     data_module.setup(stage="fit")
-    logit_adjustments = data_module.get_logit_adjustments()
+
+    samples_by_class = data_module.train_dataset.samples_by_class
+    samples_by_class = dict(sorted(samples_by_class.items()))
+    samples_by_class = [i for i in samples_by_class.values()]
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-        logit_adjustments=logit_adjustments,
+        samples_per_class=samples_by_class,
     )
+
     wand_logger = WandbLogger(offline=True)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(

@@ -1,18 +1,15 @@
 import torch
 import argparse
 import configparser
-import torchmetrics
-import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn
-from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50, TemporalResNet50
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone, logit_adjustments):
+    def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
 
         self.save_hyperparameters()
@@ -21,106 +18,31 @@ class ActionClassifier(pl.LightningModule):
         self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
         self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
 
+        # Loss
         self.ce_loss = nn.CrossEntropyLoss()
-
-        # Training metrics
-        self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.train_per_class_accuracy = torchmetrics.Accuracy(
-            num_classes=9, average="macro"
-        )
-        # Validation metrics
-        self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.val_per_class_accuracy = torchmetrics.Accuracy(
-            num_classes=9, average="macro"
-        )
 
     def forward(self, x):
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        return pred + self.hparams.logit_adjustments.to(self.device)
+        return pred
 
     def training_step(self, batch, batch_idx):
+
         x, y = batch
         pred = self(x)
-
-        self.top1_train_accuracy(pred, y)
-        self.train_per_class_accuracy(pred, y)
-
-        ce_loss = self.ce_loss(pred, y)
-
-        loss_r = 0
-        for parameter in self.parameters():
-            loss_r += torch.sum(parameter**2)
-        loss = ce_loss + self.hparams.weight_decay * loss_r
-
-        return {"loss": loss}
-
-    def training_epoch_end(self, outputs):
-
-        # Log epoch acc
-        self.log(
-            "train_top1_acc_epoch",
-            self.top1_train_accuracy,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
-
-        # Log epoch acc
-        self.log(
-            "train_per_class_acc_epoch",
-            self.train_per_class_accuracy,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
-
-        loss = torch.stack([x["loss"] for x in outputs]).mean()
-        self.log(
-            "train_loss_epoch",
-            loss,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=False,
-        )
-
-    def validation_step(self, batch, batch_idx):
-        x, y = batch
-        pred = self(x)
-
         loss = self.ce_loss(pred, y)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
-
         return {"loss": loss}
 
-    def validation_epoch_end(self, outputs):
+    def validation_step(self, batch, batch_idx):
 
-        # Log top-1 acc per epoch
-        self.log(
-            "val_top1_acc_epoch",
-            self.top1_val_accuracy,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        x, y = batch
+        pred = self(x)
+        loss = self.ce_loss(pred, y)
 
-        # Log per class acc per epoch
-        self.log(
-            "val_per_class_acc",
-            self.val_per_class_accuracy,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        return {"loss": loss}
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -141,26 +63,14 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-    data_module.setup(stage="fit")
-    logit_adjustments = data_module.get_logit_adjustments()
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-        logit_adjustments=logit_adjustments,
     )
+
     wand_logger = WandbLogger(offline=True)
-
-    val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
-    )
-
-    val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc_epoch",
-        mode="max",
-    )
 
     if cfg.get("remote", "slurm") == "ssd" or cfg.get("remote", "slurm") == "hdd":
         if not cfg.getboolean("mode", "test"):
@@ -170,10 +80,6 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-                callbacks=[
-                    val_top1_acc_checkpoint_callback,
-                    val_per_class_acc_checkpoint_callback,
-                ],
                 logger=wand_logger,
             )
         else:
@@ -193,7 +99,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=10,
+            fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
 
