@@ -1,7 +1,9 @@
 from src import (
-    supervised
+    supervised,
+    self_supervised
 )
 
 __all__ = [
     "supervised",
+    "self_supervised"
 ]
