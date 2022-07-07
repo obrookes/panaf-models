@@ -1,3 +1,5 @@
+import wandb
+import os
 import torch
 import argparse
 import configparser
@@ -11,9 +13,15 @@ from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import ResNet50, TemporalResNet50
 
 
+os.environ["WANDB_API_KEY"] = "90100ae7e09e19ac19750449baf59b1441e9a5b8"
+os.environ["WANDB_MODE"] = "offline"
+
+
 class ActionClassifier(pl.LightningModule):
     def __init__(self, lr, weight_decay, freeze_backbone):
         super().__init__()
+
+        wandb.init()
 
         self.save_hyperparameters()
 
@@ -137,8 +145,6 @@ def main():
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
     )
 
-    wand_logger = WandbLogger(offline=True)
-
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
     )
@@ -161,7 +167,6 @@ def main():
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
                 ],
-                logger=wand_logger,
             )
         else:
             trainer = pl.Trainer(
@@ -170,7 +175,6 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-                logger=wand_logger,
                 fast_dev_run=10,
             )
     else:
