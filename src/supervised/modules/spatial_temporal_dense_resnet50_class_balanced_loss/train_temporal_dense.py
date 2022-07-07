@@ -4,7 +4,6 @@ import configparser
 import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -33,19 +32,15 @@ class ActionClassifier(pl.LightningModule):
             num_classes=9, average="macro"
         )
 
-    def forward(self, x):
+    def training_step(self, batch, batch_idx):
+        x, y = batch
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        return pred
-
-    def training_step(self, batch, batch_idx):
-        x, y = batch
-        pred = self(x)
-
-        top1_train_acc = self.top1_train_accuracy(pred, y)
-        per_class_acc = self.train_per_class_accuracy(pred, y)
+        
+        print(f"Samples per class: {self.hparams.samples_per_class}")
 
         loss = CB_loss(
             labels=y,
@@ -58,6 +53,17 @@ class ActionClassifier(pl.LightningModule):
             device=self.device,
         )
 
+        top1_train_acc = self.top1_train_accuracy(pred, y)
+        per_class_acc = self.train_per_class_accuracy(pred, y)
+
+        self.log(
+            "top1_train_acc",
+            top1_train_acc,
+            logger=False,
+            on_epoch=False,
+            on_step=True,
+            prog_bar=True,
+        )
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
@@ -96,30 +102,34 @@ class ActionClassifier(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        pred = self(x)
+        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
+        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+        pred = (spatial_pred + dense_pred + temporal_pred) / 3
+        loss = F.cross_entropy(pred, y)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
+        top1_val_acc = self.top1_val_accuracy(pred, y)
 
-        loss = CB_loss(
-            labels=y,
-            logits=pred,
-            samples_per_cls=self.hparams.samples_per_class,
-            no_of_classes=9,
-            loss_type="focal",
-            beta=0.9999,
-            gamma=2.0,
-            device=self.device,
+        self.log(
+            "top1_val_acc",
+            top1_val_acc,
+            logger=False,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=False,
         )
+
+        val_per_class_acc = self.val_per_class_accuracy(pred, y)
 
         return {"loss": loss}
 
     def validation_epoch_end(self, outputs):
 
         # Log top-1 acc per epoch
+        top1_acc = self.top1_val_accuracy.compute()
         self.log(
             "val_top1_acc_epoch",
-            self.top1_val_accuracy,
+            top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -127,9 +137,10 @@ class ActionClassifier(pl.LightningModule):
         )
 
         # Log per class acc per epoch
+        val_per_class_acc = self.val_per_class_accuracy.compute()
         self.log(
             "val_per_class_acc",
-            self.val_per_class_accuracy,
+            val_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -155,7 +166,7 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-    data_module.setup(stage="fit")
+    data_module.setup(stage='fit')
 
     samples_by_class = data_module.train_dataset.samples_by_class
     samples_by_class = dict(sorted(samples_by_class.items()))
@@ -165,7 +176,7 @@ def main():
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-        samples_per_class=samples_by_class,
+        samples_per_class=samples_by_class
     )
 
     wand_logger = WandbLogger(offline=True)

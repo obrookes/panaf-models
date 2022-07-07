@@ -6,7 +6,6 @@ import configparser
 import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -29,9 +28,6 @@ class ActionClassifier(pl.LightningModule):
         self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
         self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
 
-        # Loss
-        self.ce_loss = nn.CrossEntropyLoss()
-
         # Training metrics
         self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
         self.train_per_class_accuracy = torchmetrics.Accuracy(
@@ -43,81 +39,57 @@ class ActionClassifier(pl.LightningModule):
             num_classes=9, average="macro"
         )
 
-    def forward(self, x):
+    def training_step(self, batch, batch_idx):
+        x, y = batch
         spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
         temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
         pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        return pred
+        loss = F.cross_entropy(pred, y)
 
-    def training_step(self, batch, batch_idx):
+        top1_train_acc = self.top1_train_accuracy(pred, y)
+        per_class_acc = self.train_per_class_accuracy(pred, y)
 
-        x, y = batch
-        pred = self(x)
-
-        self.top1_train_accuracy(pred, y)
-        self.train_per_class_accuracy(pred, y)
-
-        loss = self.ce_loss(pred, y)
+        wandb.log({"top1_train_acc": top1_train_acc})
 
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
 
-        self.log(
-            "train_top1_acc_epoch",
-            self.top1_train_accuracy,
-            logger=True,
-            prog_bar=True,
-            rank_zero_only=True,
-        )
+        # Log epoch acc
+        top1_acc = self.top1_train_accuracy.compute()
+        wandb.log({"train_top1_acc_epoch": top1_acc})
 
-        self.log(
-            "train_per_class_acc_epoch",
-            self.train_per_class_accuracy,
-            logger=True,
-            prog_bar=True,
-            rank_zero_only=True,
-        )
+        # Log epoch acc
+        train_per_class_acc = self.train_per_class_accuracy.compute()
+        wandb.log({"train_per_class_acc_epoch": train_per_class_acc})
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
-        self.log(
-            "train_loss_epoch",
-            loss,
-            logger=True,
-            prog_bar=False,
-            rank_zero_only=True,
-        )
+        wandb.log({"train_loss_epoch": loss})
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        pred = self(x)
+        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
+        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
+        pred = (spatial_pred + dense_pred + temporal_pred) / 3
+        loss = F.cross_entropy(pred, y)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
-
-        loss = self.ce_loss(pred, y)
+        top1_val_acc = self.top1_val_accuracy(pred, y)
+        val_per_class_acc = self.val_per_class_accuracy(pred, y)
 
         return {"loss": loss}
 
     def validation_epoch_end(self, outputs):
 
-        self.log(
-            "val_top1_acc_epoch",
-            self.top1_val_accuracy,
-            logger=True,
-            prog_bar=True,
-            rank_zero_only=True,
-        )
+        # Log top-1 acc per epoch
+        top1_acc = self.top1_val_accuracy.compute()
+        wandb.log({"val_top1_acc_epoch": top1_acc})
 
         # Log per class acc per epoch
-        self.log(
-            "val_per_class_acc",
-            self.val_per_class_accuracy,
-            logger=True,
-            prog_bar=True,
-            rank_zero_only=True,
-        )
+        val_per_class_acc = self.val_per_class_accuracy.compute()
+        wandb.log({"val_per_class_acc": val_per_class_acc})
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -151,7 +123,7 @@ def main():
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc",
+        monitor="val_per_class_acc_epoch",
         mode="max",
     )
 
@@ -184,7 +156,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=5,
+            fast_dev_run=10,
         )
     trainer.fit(model=model, datamodule=data_module)
 
