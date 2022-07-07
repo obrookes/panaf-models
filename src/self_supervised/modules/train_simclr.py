@@ -20,7 +20,7 @@ from src.self_supervised.models.resnets import ResNet50
 from src.self_supervised.models.mlp import MLP
 from pl_bolts.optimizers import LARS
 from pl_bolts.optimizers.lr_scheduler import linear_warmup_decay
-from src.self_supervised.callbacks.callback import SSLOnlineEvaluator
+from src.self_supervised.callbacks.ssl import SSLOnlineEvaluator
 import matplotlib.pyplot as plt
 
 
