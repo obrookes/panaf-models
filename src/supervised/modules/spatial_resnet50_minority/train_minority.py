@@ -26,11 +26,32 @@ class ActionClassifier(pl.LightningModule):
         self.train_per_class_accuracy = torchmetrics.Accuracy(
             num_classes=6, average="macro"
         )
+        self.train_per_class = torchmetrics.Accuracy(num_classes=6, average="none")
+
         # Validation metrics
         self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
         self.val_per_class_accuracy = torchmetrics.Accuracy(
             num_classes=6, average="macro"
         )
+
+        self.val_per_class = torchmetrics.Accuracy(num_classes=6, average="none")
+
+    def per_class_dict(self, x: torch.Tensor):
+
+        classes = {
+            0: "camera_interaction",
+            1: "climbing_down",
+            2: "climbing_up",
+            3: "hanging",
+            4: "running",
+            5: "sitting_on_back",
+        }
+
+        results = {}
+        x = torch.nan_to_num(x)
+        for i, item in enumerate(x):
+            results[classes[i]] = float(item)
+        return results
 
     def forward(self, x):
         pred = self.model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -42,6 +63,7 @@ class ActionClassifier(pl.LightningModule):
 
         self.top1_train_accuracy(pred, y)
         self.train_per_class_accuracy(pred, y)
+        self.train_per_class(pred, y)
 
         loss = self.ce_loss(pred, y)
 
@@ -59,7 +81,6 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        # Log epoch acc
         self.log(
             "train_per_class_acc_epoch",
             self.train_per_class_accuracy,
@@ -68,6 +89,9 @@ class ActionClassifier(pl.LightningModule):
             on_step=False,
             prog_bar=True,
         )
+
+        train_per_class_acc = self.per_class_dict(self.train_per_class.compute())
+        self.log("train_per_class_acc", train_per_class_acc, on_epoch=True)
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
@@ -87,6 +111,7 @@ class ActionClassifier(pl.LightningModule):
 
         self.top1_val_accuracy(pred, y)
         self.val_per_class_accuracy(pred, y)
+        self.val_per_class(pred, y)
 
         return {"loss": loss}
 
@@ -111,6 +136,9 @@ class ActionClassifier(pl.LightningModule):
             on_step=False,
             prog_bar=True,
         )
+
+        val_per_class_acc = self.per_class_dict(self.val_per_class.compute())
+        self.log("train_per_class_acc", val_per_class_acc, on_epoch=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -145,7 +173,7 @@ def main():
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc_epoch",
+        monitor="val_per_class_acc",
         mode="max",
     )
 
