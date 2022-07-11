@@ -7,29 +7,11 @@ from pytorch_lightning.utilities import rank_zero_warn
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.optim import Optimizer
-from torchmetrics.functional import accuracy
-
 from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
 
 class SSLOnlineEvaluator(Callback):  # pragma: no cover
-    """Attaches a MLP for fine-tuning using the standard self-supervised protocol.
-
-    Example::
-
-        # your datamodule must have 2 attributes
-        dm = DataModule()
-        dm.num_classes = ... # the num of classes in the datamodule
-        dm.name = ... # name of the datamodule (e.g. ImageNet, STL10, CIFAR10)
-
-        # your model must have 1 attribute
-        model = Model()
-        model.z_dim = ... # the representation dim
-
-        online_eval = SSLOnlineEvaluator(
-            z_dim=model.z_dim
-        )
-    """
+    """Attaches a MLP for fine-tuning using self-supervised protocol."""
 
     def __init__(
         self,
