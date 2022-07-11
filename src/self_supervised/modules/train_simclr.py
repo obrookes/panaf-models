@@ -106,16 +106,12 @@ class ActionClassifier(pl.LightningModule):
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
-        x = x["spatial_sample"]
-
-        x_r = rearrange(x, "b t c w h -> (b t) c w h")
-
         if self.trainer.training:
-            x1, x2 = self.train_augmentations(x_r)
+            x1, x2 = self.train_augmentations(x["spatial_sample"])
         if self.trainer.validating:
-            x1, x2 = self.val_augmentations(x_r)
+            x1, x2 = self.val_augmentations(x["spatial_sample"])
 
-        x = rearrange(x, "b t c w h -> b c t w h")
+        x = rearrange(x['spatial_sample'], "b t c w h -> b c t w h")
 
         return x1, x2, x, y
 
