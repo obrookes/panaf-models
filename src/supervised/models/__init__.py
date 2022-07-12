@@ -4,5 +4,8 @@ from .resnet50 import (
     TemporalResNet50,
     SoftmaxEmbedderResNet50,
     TemporalSoftmaxEmbedderResNet50,
+    ResNet50Embedder,
+    TemporalResNet50Embedder,
+    ThreeStreamNetwork
 )
 from .slowfast50 import SlowFast50
