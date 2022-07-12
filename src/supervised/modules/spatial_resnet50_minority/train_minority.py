@@ -9,6 +9,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.models import MinorityResNet50
+from src.supervised.callbacks.custom_metrics import PerClassAccuracy
 
 
 class ActionClassifier(pl.LightningModule):
@@ -99,10 +100,6 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=False,
         )
 
-        train_per_class_acc = self.per_class_dict(self.train_per_class_acc.compute())
-        self.log("train_per_class_acc", train_per_class_acc, on_epoch=True)
-        self.train_per_class_acc.reset()
-
     def validation_step(self, batch, batch_idx):
         x, y = batch
         pred = self(x)
@@ -137,10 +134,6 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=True,
         )
 
-        val_per_class_acc = self.per_class_dict(self.val_per_class_acc.compute())
-        self.log("val_per_class_acc", val_per_class_acc, on_epoch=True)
-        self.val_per_class_acc.reset()
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
             self.parameters(),
@@ -167,6 +160,10 @@ def main():
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
     )
     wand_logger = WandbLogger(offline=True)
+
+    avg_per_class_acc_callback = PerClassAccuracy(
+        which_classes=cfg.get("dataset", "classes")
+    )
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
@@ -209,6 +206,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            callbacks=[avg_per_class_acc_callback],
             fast_dev_run=10,
         )
     trainer.fit(model=model, datamodule=data_module)
