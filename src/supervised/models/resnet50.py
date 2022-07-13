@@ -140,7 +140,7 @@ class TemporalResNet50(nn.Module):
 
 
 class TemporalSoftmaxEmbedderResNet50(nn.Module):
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
 
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -161,7 +161,7 @@ class TemporalSoftmaxEmbedderResNet50(nn.Module):
 
         self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
         self.res_head = create_res_basic_head(in_features=2048, out_features=128)
-        self.fc = nn.Linear(in_features=128, out_features=9)
+        self.fc = nn.Linear(in_features=128, out_features=out_features)
 
         if self.freeze_backbone:
             for param in self.backbone.parameters():
@@ -174,7 +174,7 @@ class TemporalSoftmaxEmbedderResNet50(nn.Module):
 
 
 class SoftmaxEmbedderResNet50(nn.Module):
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
 
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -186,7 +186,7 @@ class SoftmaxEmbedderResNet50(nn.Module):
 
         self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
         self.res_head = create_res_basic_head(in_features=2048, out_features=128)
-        self.fc = nn.Linear(in_features=128, out_features=9)
+        self.fc = nn.Linear(in_features=128, out_features=out_features)
 
         if self.freeze_backbone:
             for param in self.backbone.parameters():

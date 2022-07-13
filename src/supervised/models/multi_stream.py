@@ -5,8 +5,12 @@ from .resnet50 import (
     TemporalResNet50,
     ResNet50Embedder,
     TemporalResNet50Embedder,
+    SoftmaxEmbedderResNet50,
+    TemporalSoftmaxEmbedderResNet50,
 )
 
+# ====> Models for supervised training <====
+# ==========================================
 
 class ResNet50S(nn.Module):
     """
@@ -125,3 +129,70 @@ class ThreeStreamNetworkLF(nn.Module):
         emb = torch.cat((rgb_emb, flow_emb, pose_emb), dim=1)
         pred = self.fc3(self.fc2(self.fc1(emb)))
         return pred
+
+
+# ======> Models for triplet loss <===========
+# ============================================
+
+class SpatialStreamNetworkEmbedderSoftmax(nn.Module):
+    """
+    Single, spatial stream network that outputs a 128-dimensional 
+    vector and logits.
+    """
+
+    def __init__(self, freeze_backbone=False, out_features=9):
+        super().__init__()
+
+        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+
+    def forward(self, x):
+        emb, pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        return emb, pred
+
+
+class DualStreamNetworkEmbedderSoftmax(nn.Module):
+    """
+    Dual stream network where each stream outputs
+    a 128-dimensional vector and logits. In the forward 
+    method both vector and logits are averaged over all
+    streams.
+    """
+
+    def __init__(self, freeze_backbone=False, out_features=9):
+        super().__init__()
+
+        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.flow_stream = TemporalSoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+
+    def forward(self, x):
+        rgb_emb, rgb_pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        flow_emb, flow_pred = self.flow_stream(x["flow_sample"].permute(0, 2, 1, 3, 4))
+
+        emb = (rgb_emb + flow_emb) / 2
+        pred = (rgb_pred + flow_pred) / 2
+        return emb, pred
+
+
+class ThreeStreamNetworkEmbedderSoftmax(nn.Module):
+    """
+    Three stream network where each stream outputs
+    a 128-dimensional vector and logits. In the forward 
+    method both vector and logits are averaged over all
+    streams.
+    """
+
+    def __init__(self, freeze_backbone=False, out_features=9):
+        super().__init__()
+
+        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.flow_stream = TemporalSoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.pose_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+
+    def forward(self, x):
+        rgb_emb, rgb_pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        flow_emb, flow_pred = self.flow_stream(x["flow_sample"].permute(0, 2, 1, 3, 4))
+        pose_emb, pose_pred = self.pose_stream(x["dense_sample"].permute(0, 2, 1, 3, 4))
+
+        emb = (rgb_emb + flow_emb + pose_emb) / 3
+        pred = (rgb_pred + flow_pred + pose_pred ) / 3
+        return emb, pred

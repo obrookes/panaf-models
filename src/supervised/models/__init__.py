@@ -10,11 +10,16 @@ from .resnet50 import (
 )
 
 from .multi_stream import (
+    # => supervised models <=
     ResNet50S,
     RGBFlowNetworkSF,
     RGBDenseNetworkSF,
     ThreeStreamNetworkSF,
-    ThreeStreamNetworkLF
+    ThreeStreamNetworkLF,
+    # => triplet models <=
+    SpatialStreamNetworkEmbedderSoftmax,
+    DualStreamNetworkEmbedderSoftmax,
+    ThreeStreamNetworkEmbedderSoftmax,
 )
 
 from .slowfast50 import SlowFast50
