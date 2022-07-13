@@ -7,6 +7,19 @@ from .resnet50 import (
     TemporalResNet50Embedder,
 )
 
+class ResNet50S(nn.Module):
+    """
+    Single stream network which output logits or softmax 
+    for rgb stream.
+    """
+    def __init__(self, freeze_backbone=False):
+        super().__init__()
+        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
+    
+    def forward(self, x):
+        rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        return rgb_score
+
 
 class RGBFlowNetworkSF(nn.Module):
     """

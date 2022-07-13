@@ -10,6 +10,7 @@ from .resnet50 import (
 )
 
 from .multi_stream import (
+    ResNet50S,
     RGBFlowNetworkSF,
     RGBDenseNetworkSF,
     ThreeStreamNetworkSF,

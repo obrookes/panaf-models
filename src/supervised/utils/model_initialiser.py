@@ -1,5 +1,5 @@
 from src.supervised.models import (
-    ResNet50, # single rgb-stream
+    ResNet50S, # single rgb-stream
     RGBDenseNetworkSF, # dual rgb and pose
     RGBFlowNetworkSF, # dual rgb + flow
     ThreeStreamNetworkSF # triple-stream
@@ -7,7 +7,7 @@ from src.supervised.models import (
 
 def initialise_model(name, freeze_backbone):
     if name == 'r':
-        model = ResNet50(freeze_backbone=freeze_backbone)
+        model = ResNet50S(freeze_backbone=freeze_backbone)
     elif name == 'rd':
         model = RGBDenseNetworkSF(freeze_backbone=freeze_backbone)
     elif name == 'rf':
