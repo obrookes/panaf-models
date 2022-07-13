@@ -5,20 +5,23 @@ import torchmetrics
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn
+from configparser import NoOptionError
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import MinorityResNet50
 from src.supervised.callbacks.custom_metrics import PerClassAccuracy
+from src.supervised.utils.model_initialiser import initialise_model
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone):
+    def __init__(self, lr, weight_decay, model_name, freeze_backbone):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.model = MinorityResNet50(freeze_backbone=freeze_backbone)
+        self.model = initialise_model(
+            name=model_name, freeze_backbone=freeze_backbone, out_features=6
+        )
 
         self.ce_loss = nn.CrossEntropyLoss()
 
@@ -36,25 +39,8 @@ class ActionClassifier(pl.LightningModule):
         )
         self.val_per_class_acc = torchmetrics.Accuracy(num_classes=6, average="none")
 
-    def per_class_dict(self, x: torch.Tensor):
-
-        classes = {
-            0: "camera_interaction",
-            1: "climbing_down",
-            2: "climbing_up",
-            3: "hanging",
-            4: "running",
-            5: "sitting_on_back",
-        }
-
-        results = {}
-        x = torch.nan_to_num(x)
-        for i, item in enumerate(x):
-            results[classes[i]] = float(item)
-        return results
-
     def forward(self, x):
-        pred = self.model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
+        pred = self.model(x)
         return pred
 
     def training_step(self, batch, batch_idx):
@@ -157,13 +143,13 @@ def main():
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
     )
     wand_logger = WandbLogger(offline=True)
 
-    avg_per_class_acc_callback = PerClassAccuracy(
-        which_classes=cfg.get("dataset", "classes")
-    )
+    which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
+    avg_per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
@@ -186,6 +172,7 @@ def main():
                 callbacks=[
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
+                    avg_per_class_acc_callback,
                 ],
                 logger=wand_logger,
             )
