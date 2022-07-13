@@ -4,30 +4,6 @@ from torch.nn import Conv3d
 from pytorchvideo.models.head import create_res_basic_head
 
 
-class ThreeStreamNetwork(nn.Module):
-    def __init__(self, device, freeze_backbone=False):
-        super().__init__()
-
-        self.device = device
-
-        self.rgb_stream = ResNet50Embedder(freeze_backbone=freeze_backbone)
-        self.flow_stream = TemporalResNet50Embedder(freeze_backbone=freeze_backbone)
-        self.pose_stream = ResNet50Embedder(freeze_backbone=freeze_backbone)
-
-        self.fc1 = nn.Linear(in_features=3072, out_features=1024)
-        self.fc2 = nn.Linear(in_features=1024, out_features=512)
-        self.fc3 = nn.Linear(in_features=512, out_features=9)
-
-    def forward(self, x):
-        rgb_emb = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        flow_emb = self.flow_stream(x["flow_sample"].permute(0, 2, 1, 3, 4))
-        pose_emb = self.pose_stream(x["dense_sample"].permute(0, 2, 1, 3, 4))
-
-        emb = torch.cat((rgb_emb, flow_emb, pose_emb), dim=1)
-        pred = self.fc3(self.fc2(self.fc1(emb)))
-        return pred
-
-
 class ResNet50Embedder(nn.Module):
     def __init__(self, freeze_backbone=False):
 

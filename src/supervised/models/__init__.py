@@ -6,6 +6,14 @@ from .resnet50 import (
     TemporalSoftmaxEmbedderResNet50,
     ResNet50Embedder,
     TemporalResNet50Embedder,
-    ThreeStreamNetwork
+    
 )
+
+from .multi_stream import (
+    RGBFlowNetworkSF,
+    RGBDenseNetworkSF,
+    ThreeStreamNetworkSF,
+    ThreeStreamNetworkLF
+)
+
 from .slowfast50 import SlowFast50

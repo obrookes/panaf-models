@@ -1,53 +1,44 @@
-import wandb
-import os
 import torch
 import argparse
 import configparser
 import torchmetrics
-import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import ResNet50, TemporalResNet50
-
-
-os.environ["WANDB_API_KEY"] = "90100ae7e09e19ac19750449baf59b1441e9a5b8"
-os.environ["WANDB_MODE"] = "offline"
+from src.supervised.utils import initialise_model
+from src.supervised.callbacks.custom_metrics import PerClassAccuracy
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone):
+    def __init__(self, lr, weight_decay, model_name, freeze_backbone):
         super().__init__()
-
-        wandb.init()
 
         self.save_hyperparameters()
 
-        self.spatial_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
+        # TODO: automatically pass model name
+        self.model = initialise_model(name=model_name, freeze_backbone=freeze_backbone)
 
         # Loss
         self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
-        self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.train_per_class_accuracy = torchmetrics.Accuracy(
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
         # Validation metrics
-        self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.val_per_class_accuracy = torchmetrics.Accuracy(
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
     def forward(self, x):
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred + temporal_pred) / 3
+        pred = self.model(x)
         return pred
 
     def training_step(self, batch, batch_idx):
@@ -55,8 +46,9 @@ class ActionClassifier(pl.LightningModule):
         x, y = batch
         pred = self(x)
 
-        self.top1_train_accuracy(pred, y)
-        self.train_per_class_accuracy(pred, y)
+        self.train_top1_acc(pred, y)
+        self.train_avg_per_class_acc(pred, y)
+        self.train_per_class_acc.update(pred, y)
 
         loss = self.ce_loss(pred, y)
 
@@ -65,36 +57,34 @@ class ActionClassifier(pl.LightningModule):
     def training_epoch_end(self, outputs):
 
         self.log(
-            "train_top1_acc_epoch",
-            self.top1_train_accuracy,
+            "train_top1_acc",
+            self.train_top1_acc,
             logger=True,
             prog_bar=True,
-            rank_zero_only=True,
         )
 
         self.log(
-            "train_per_class_acc_epoch",
-            self.train_per_class_accuracy,
+            "train_avg_per_class_acc",
+            self.train_avg_per_class_acc,
             logger=True,
             prog_bar=True,
-            rank_zero_only=True,
         )
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
-            "train_loss_epoch",
+            "train_loss",
             loss,
             logger=True,
             prog_bar=False,
-            rank_zero_only=True,
         )
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         pred = self(x)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
+        self.val_top1_acc(pred, y)
+        self.val_avg_per_class_acc(pred, y)
+        self.val_per_class_acc.update(pred, y)
 
         loss = self.ce_loss(pred, y)
 
@@ -103,17 +93,16 @@ class ActionClassifier(pl.LightningModule):
     def validation_epoch_end(self, outputs):
 
         self.log(
-            "val_top1_acc_epoch",
-            self.top1_val_accuracy,
+            "val_top1_acc",
+            self.val_top1_acc,
             logger=True,
             prog_bar=True,
-            rank_zero_only=True,
         )
 
         # Log per class acc per epoch
         self.log(
-            "val_per_class_acc",
-            self.val_per_class_accuracy,
+            "val_avg_per_class_acc",
+            self.val_avg_per_class_acc,
             logger=True,
             prog_bar=True,
             rank_zero_only=True,
@@ -137,21 +126,25 @@ def main():
     cfg = configparser.ConfigParser()
     cfg.read(args.config)
 
+    wandb_logger = WandbLogger(offline=True)
     data_module = SupervisedPanAfDataModule(cfg=cfg)
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
+        model_name=cfg.get("dataset", "type"),
     )
 
+    per_class_acc_callback = PerClassAccuracy(cfg.get("dataset", "classes"))
+
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
+        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc",
+        monitor="val_avg_per_class_acc",
         mode="max",
     )
 
@@ -166,6 +159,7 @@ def main():
                 callbacks=[
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
+                    per_class_acc_callback,
                 ],
             )
         else:
@@ -184,6 +178,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            callbacks=[per_class_acc_callback],
             fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
