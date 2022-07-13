@@ -2,51 +2,53 @@ import torch
 import argparse
 import configparser
 import torchmetrics
-import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import ResNet50, TemporalResNet50
+from src.supervised.utils.model_initialiser import initialise_model
+from src.supervised.callbacks.custom_metrics import PerClassAccuracy
+from configparser import NoOptionError
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone, logit_adjustments):
+    def __init__(
+        self, lr, weight_decay, model_name, freeze_backbone, logit_adjustments
+    ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.spatial_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
+        self.model = initialise_model(name=model_name, freeze_backbone=freeze_backbone)
 
         self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
-        self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.train_per_class_accuracy = torchmetrics.Accuracy(
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
         # Validation metrics
-        self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.val_per_class_accuracy = torchmetrics.Accuracy(
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
     def forward(self, x):
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred + temporal_pred) / 3
+        pred = self.model(x)
         return pred + self.hparams.logit_adjustments.to(self.device)
 
     def training_step(self, batch, batch_idx):
         x, y = batch
         pred = self(x)
 
-        self.top1_train_accuracy(pred, y)
-        self.train_per_class_accuracy(pred, y)
+        self.train_top1_acc(pred, y)
+        self.train_avg_per_class_acc(pred, y)
+        self.train_per_class_acc.update(pred, y)
 
         ce_loss = self.ce_loss(pred, y)
 
@@ -61,8 +63,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log epoch acc
         self.log(
-            "train_top1_acc_epoch",
-            self.top1_train_accuracy,
+            "train_top1_acc",
+            self.train_top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -71,8 +73,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log epoch acc
         self.log(
-            "train_per_class_acc_epoch",
-            self.train_per_class_accuracy,
+            "train_avg_per_class_acc",
+            self.train_avg_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -81,7 +83,7 @@ class ActionClassifier(pl.LightningModule):
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
-            "train_loss_epoch",
+            "train_loss",
             loss,
             logger=True,
             on_epoch=True,
@@ -95,8 +97,9 @@ class ActionClassifier(pl.LightningModule):
 
         loss = self.ce_loss(pred, y)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
+        self.val_top1_acc(pred, y)
+        self.val_avg_per_class_acc(pred, y)
+        self.val_per_class_acc.update(pred, y)
 
         return {"loss": loss}
 
@@ -104,8 +107,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log top-1 acc per epoch
         self.log(
-            "val_top1_acc_epoch",
-            self.top1_val_accuracy,
+            "val_top1_acc",
+            self.val_top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -114,8 +117,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log per class acc per epoch
         self.log(
-            "val_per_class_acc",
-            self.val_per_class_accuracy,
+            "val_avg_per_class_acc",
+            self.val_avg_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -142,23 +145,29 @@ def main():
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
     data_module.setup(stage="fit")
+
+    print("=> Calculating logit adjustments")
     logit_adjustments = data_module.get_logit_adjustments()
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
         logit_adjustments=logit_adjustments,
     )
     wand_logger = WandbLogger(offline=True)
 
+    which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
+    per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
+
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
+        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc_epoch",
+        monitor="val_avg_per_class_acc",
         mode="max",
     )
 
@@ -173,6 +182,7 @@ def main():
                 callbacks=[
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
+                    per_class_acc_callback,
                 ],
                 logger=wand_logger,
             )
