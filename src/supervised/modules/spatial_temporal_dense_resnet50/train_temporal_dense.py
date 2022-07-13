@@ -163,6 +163,7 @@ def main():
                     val_per_class_acc_checkpoint_callback,
                     per_class_acc_callback,
                 ],
+                logger=wandb_logger,
             )
         else:
             trainer = pl.Trainer(
