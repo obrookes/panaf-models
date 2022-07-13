@@ -14,9 +14,9 @@ class ResNet50S(nn.Module):
     for rgb stream.
     """
 
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
-        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
+        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
 
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
