@@ -9,6 +9,7 @@ from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
 from src.supervised.utils import initialise_model
 from src.supervised.callbacks.custom_metrics import PerClassAccuracy
+from configparser import NoOptionError
 
 
 class ActionClassifier(pl.LightningModule):
@@ -136,7 +137,8 @@ def main():
         model_name=cfg.get("dataset", "type"),
     )
 
-    per_class_acc_callback = PerClassAccuracy(cfg.get("dataset", "classes"))
+    which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
+    per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
