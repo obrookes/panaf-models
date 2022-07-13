@@ -7,15 +7,17 @@ from .resnet50 import (
     TemporalResNet50Embedder,
 )
 
+
 class ResNet50S(nn.Module):
     """
-    Single stream network which output logits or softmax 
+    Single stream network which output logits or softmax
     for rgb stream.
     """
+
     def __init__(self, freeze_backbone=False):
         super().__init__()
         self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
-    
+
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
         return rgb_score
@@ -28,11 +30,15 @@ class RGBFlowNetworkSF(nn.Module):
     optical flow stream is computed.
     """
 
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
-        self.flow_stream = TemporalResNet50(freeze_backbone=freeze_backbone)
+        self.rgb_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.flow_stream = TemporalResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -48,11 +54,15 @@ class RGBDenseNetworkSF(nn.Module):
     dense pose stream is computed.
     """
 
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
-        self.pose_stream = ResNet50(freeze_backbone=freeze_backbone)
+        self.rgb_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.pose_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -68,12 +78,18 @@ class ThreeStreamNetworkSF(nn.Module):
     is computed.
     """
 
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone)
-        self.flow_stream = TemporalResNet50(freeze_backbone=freeze_backbone)
-        self.pose_stream = ResNet50(freeze_backbone=freeze_backbone)
+        self.rgb_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.flow_stream = TemporalResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.pose_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
