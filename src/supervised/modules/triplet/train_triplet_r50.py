@@ -178,13 +178,17 @@ def main():
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
 
+    data_type = cfg.get("dataset", "type")
+    margin = cfg.getfloat("triplets", "margin")
+    type_of_triplets = cfg.get("triplets", "type_of_triplets")
+
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-        margin=cfg.getfloat("triplets", "margin"),
-        type_of_triplets=cfg.get("triplets", "type_of_triplets")
+        margin=margin,
+        type_of_triplets=type_of_triplets,
     )
     wand_logger = WandbLogger(offline=True)
 
@@ -192,11 +196,13 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
+        dirpath="checkpoints/val_top1_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        monitor="val_top1_acc",
+        mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
+        dirpath="checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
         monitor="val_per_class_acc",
         mode="max",
     )
