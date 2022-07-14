@@ -21,16 +21,22 @@ from configparser import NoOptionError
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, model_name, freeze_backbone):
+    def __init__(
+        self, lr, weight_decay, model_name, freeze_backbone, margin, type_of_triplets
+    ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.model = initialise_triplet_model(name=model_name, freeze_backbone=freeze_backbone)
+        self.model = initialise_triplet_model(
+            name=model_name, freeze_backbone=freeze_backbone
+        )
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
-        self.triplet_miner = TripletMarginMiner(margin=0.2, type_of_triplets="easy")
+        self.triplet_miner = TripletMarginMiner(
+            margin=margin, type_of_triplets=type_of_triplets
+        )
         self.triplet_loss = OnlineReciprocalTripletLoss()  # self.selector
         self.ce_loss = nn.CrossEntropyLoss()
 
@@ -47,7 +53,6 @@ class ActionClassifier(pl.LightningModule):
             num_classes=9, average="macro"
         )
         self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
-
 
     def forward(self, x):
         emb, pred = self.model(x)
@@ -178,6 +183,8 @@ def main():
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
+        margin=cfg.getfloat("triplets", "margin"),
+        type_of_triplets=cfg.get("triplets", "type_of_triplets")
     )
     wand_logger = WandbLogger(offline=True)
 
