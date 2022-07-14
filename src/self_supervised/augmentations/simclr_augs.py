@@ -6,8 +6,12 @@ from kornia.augmentation import (
     ColorJitter,
     RandomResizedCrop,
     RandomHorizontalFlip,
+    RandomVerticalFlip,
+    RandomPerspective,
     RandomGrayscale,
+    RandomAffine,
     Resize,
+    RandomGaussianBlur,
 )
 from kornia.filters import gaussian_blur2d
 from einops import rearrange
@@ -27,21 +31,28 @@ class SimCLRTrainDataTransform(nn.Module):
         self.input_height = input_height
         self.gaussian_blur = gaussian_blur
 
+        self.kernel_size = 0.1 * self.input_height
+        self.sigma = 1.0
+
         self.transforms = nn.Sequential(
-            RandomResizedCrop(
-                size=(self.input_height, self.input_height), same_on_batch=True
-            ),
             RandomHorizontalFlip(p=0.5, same_on_batch=True),
+            RandomVerticalFlip(p=0.5, same_on_batch=True),
             ColorJitter(
                 0.8 * self.jitter_strength,
                 0.8 * self.jitter_strength,
                 0.8 * self.jitter_strength,
                 0.2 * self.jitter_strength,
-                p=0.8,
+                p=0.5,
                 same_on_batch=True,
             ),
             RandomGrayscale(p=0.2, same_on_batch=True),
-            GaussianBlur(kernel_size=0.1 * self.input_height),
+            RandomGaussianBlur(
+                kernel_size=(math.ceil(self.kernel_size), math.ceil(self.kernel_size)),
+                sigma=(self.sigma, self.sigma),
+                p=0.5,
+                same_on_batch=True,
+            ),
+            RandomPerspective(p=0.5, same_on_batch=True),
         )
 
     def forward(self, sample):
@@ -56,6 +67,13 @@ class SimCLRTrainDataTransform(nn.Module):
             x_j = rearrange(x_j, "(b t) c w h -> b c t w h", b=b_size)
 
         return x_i, x_j
+
+    """
+    => Removed from train augs
+    RandomResizedCrop(
+        size=(self.input_height, self.input_height), same_on_batch=True
+    ),
+    """
 
 
 class GaussianBlur(nn.Module):
