@@ -58,7 +58,7 @@ class ActionClassifier(pl.LightningModule):
         arch: str = "resnet50",
         feature_dim: int = 2048,
         hidden_mlp: int = 4096,
-        feat_dim: int = 128,
+        feat_dim: int = 256,
         warmup_epochs: int = 10,
         max_epochs: int = 100,
         temperature: float = 0.1,
@@ -80,12 +80,13 @@ class ActionClassifier(pl.LightningModule):
 
         self.mmt = mmt
         self.feature_dim = feature_dim
+
         backbone = ResNet50()
         projector = nn.Sequential(
             nn.Linear(feature_dim, hidden_mlp, bias=False),
             norm(hidden_mlp),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_mlp, feature_dim, bias=True),
+            nn.Linear(hidden_mlp, feat_dim, bias=True),
         )
 
         if projector is not None:
@@ -101,10 +102,10 @@ class ActionClassifier(pl.LightningModule):
             p.requires_grad = False
 
         self.predictor = nn.Sequential(
-            nn.Linear(feature_dim, hidden_mlp, bias=False),
+            nn.Linear(feat_dim, hidden_mlp, bias=False),
             norm(hidden_mlp),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_mlp, feature_dim, bias=True),
+            nn.Linear(hidden_mlp, feat_dim, bias=True),
         )
 
         # Instantiate augmentations
@@ -195,7 +196,7 @@ class ActionClassifier(pl.LightningModule):
         return x1, x2, x, y
 
     def forward(self, x):
-        return self.forward_backbone(x)
+        return self.backbone[0](x)
 
     def shared_step(self, batch):
         x1, x2, x, y = batch
