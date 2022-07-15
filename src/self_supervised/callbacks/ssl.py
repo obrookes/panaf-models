@@ -1,5 +1,4 @@
 import torch
-import torchmetrics
 from contextlib import contextmanager
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 from pytorch_lightning import Callback, LightningModule, Trainer
@@ -11,7 +10,9 @@ from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
 
 class SSLOnlineEvaluator(Callback):  # pragma: no cover
-    """Attaches a MLP for fine-tuning using self-supervised protocol."""
+    """
+    Attaches a MLP for fine-tuning using the standard self-supervised protocol.
+    """
 
     def __init__(
         self,
@@ -19,7 +20,7 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         drop_p: float = 0.2,
         hidden_dim: Optional[int] = None,
         num_classes: Optional[int] = None,
-        dataset: Optional[str] = None,
+        strategy: Optional[str] = None,
     ):
         """
         Args:
@@ -35,10 +36,8 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         self.optimizer: Optional[Optimizer] = None
         self.online_evaluator: Optional[SSLEvaluator] = None
-        self.num_classes: Optional[int] = None
-        self.dataset: Optional[str] = None
         self.num_classes: Optional[int] = num_classes
-        self.dataset: Optional[str] = dataset
+        self.strategy: Optional[str] = strategy
 
         self._recovered_callback_state: Optional[Dict[str, Any]] = None
 
@@ -47,12 +46,8 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
     ) -> None:
         if self.num_classes is None:
             self.num_classes = trainer.datamodule.num_classes
-        if self.dataset is None:
-            self.dataset = trainer.datamodule.name
 
-    def on_pretrain_routine_start(
-        self, trainer: Trainer, pl_module: LightningModule
-    ) -> None:
+    def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         # must move to device after setup, as during setup, pl_module is still on cpu
         self.online_evaluator = SSLEvaluator(
             n_input=self.z_dim,
@@ -61,30 +56,12 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
             n_hidden=self.hidden_dim,
         ).to(pl_module.device)
 
-        # switch fo PL compatibility reasons
-        accel = (
-            trainer.accelerator_connector
-            if hasattr(trainer, "accelerator_connector")
-            else trainer._accelerator_connector
-        )
+        if self.strategy == "ddp":
+            from torch.nn.parallel import DistributedDataParallel as DDP
 
-        if not accel.is_distributed:
-            if accel.use_ddp:
-                from torch.nn.parallel import DistributedDataParallel as DDP
-
-                self.online_evaluator = DDP(
-                    self.online_evaluator, device_ids=[pl_module.device]
-                )
-            elif accel.use_dp:
-                from torch.nn.parallel import DataParallel as DP
-
-                self.online_evaluator = DP(
-                    self.online_evaluator, device_ids=[pl_module.device]
-                )
-            else:
-                rank_zero_warn(
-                    "Does not support this type of distributed accelerator. The online evaluator will not sync."
-                )
+            self.online_evaluator = DDP(
+                self.online_evaluator, device_ids=[pl_module.device]
+            )
 
         self.optimizer = torch.optim.Adam(self.online_evaluator.parameters(), lr=1e-4)
 
@@ -100,9 +77,6 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         self, batch: Sequence, device: Union[str, torch.device]
     ) -> Tuple[Tensor, Tensor]:
         # get the labeled batch
-        if self.dataset == "stl10":
-            labeled_batch = batch[1]
-            batch = labeled_batch
 
         _, _, x, y = batch
 

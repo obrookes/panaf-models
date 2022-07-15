@@ -41,6 +41,7 @@ class SyncFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         grad_input = grad_output.clone()
+        # possible change: grad_input.contiguous()
         torch.distributed.all_reduce(
             grad_input, op=torch.distributed.ReduceOp.SUM, async_op=False
         )
@@ -80,8 +81,6 @@ class ActionClassifier(pl.LightningModule):
         self.encoder = ResNet50()
         self.projection = MLP()
 
-        self.mlp = MLP()
-
         global_batch_size = (
             self.hparams.num_nodes * self.hparams.gpus * self.hparams.batch_size
             if self.hparams.gpus > 0
@@ -106,12 +105,14 @@ class ActionClassifier(pl.LightningModule):
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
-        if self.trainer.training:
-            x1, x2 = self.train_augmentations(x["spatial_sample"])
-        if self.trainer.validating:
-            x1, x2 = self.val_augmentations(x["spatial_sample"])
+        x = x["spatial_sample"]
 
-        x = rearrange(x['spatial_sample'], "b t c w h -> b c t w h")
+        if self.trainer.training or self.trainer.sanity_checking:
+            x1, x2 = self.train_augmentations(x)
+        if self.trainer.validating:
+            x1, x2 = self.val_augmentations(x)
+
+        x = rearrange(x, "b t c w h -> b c t w h")
 
         return x1, x2, x, y
 
@@ -268,14 +269,18 @@ def main():
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
 
-    model = ActionClassifier(gpus=0, num_samples=17624, batch_size=2, num_nodes=1)
+    model = ActionClassifier(
+        gpus=cfg.getint("trainer", "gpus"),
+        num_samples=17624,  # Need to auto-calculate this
+        batch_size=cfg.getint("loader", "batch_size"),
+        num_nodes=cfg.getint("trainer", "num_nodes"),
+    )
 
     online_evaluator = SSLOnlineEvaluator(
         drop_p=0.0,
         hidden_dim=None,
         z_dim=2048,
         num_classes=9,
-        dataset=None,
     )
 
     wand_logger = WandbLogger(offline=True)
@@ -301,6 +306,7 @@ def main():
                 callbacks=[
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
+                    online_evaluator,
                 ],
                 logger=wand_logger,
             )
@@ -311,6 +317,7 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                callbacks=[online_evaluator],
                 logger=wand_logger,
                 fast_dev_run=10,
             )
