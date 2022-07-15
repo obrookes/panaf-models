@@ -4,7 +4,7 @@ import argparse
 import configparser
 import torchmetrics
 import pytorch_lightning as pl
-import torch.functional as F
+import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
 from typing import Callable
