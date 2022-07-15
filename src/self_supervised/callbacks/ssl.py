@@ -116,7 +116,7 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         pl_module.train_top1_acc(mlp_logits.softmax(-1), y)
         pl_module.train_avg_per_class_acc(mlp_logits.softmax(-1), y)
-        pl_module.train_per_class_acc(mlp_logits.softmax(-1), y)
+        pl_module.train_per_class_acc.update(mlp_logits.softmax(-1), y)
 
         # update finetune weights
         mlp_loss.backward()
