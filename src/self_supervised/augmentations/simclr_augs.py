@@ -52,7 +52,6 @@ class SimCLRTrainDataTransform(nn.Module):
                 p=0.5,
                 same_on_batch=True,
             ),
-            RandomPerspective(p=0.5, same_on_batch=True),
         )
 
     def forward(self, sample):
