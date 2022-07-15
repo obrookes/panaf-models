@@ -114,8 +114,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         mlp_logits, mlp_loss, y = self.shared_step(pl_module, batch)
 
-        pl_module.top1_train_accuracy(mlp_logits.softmax(-1), y)
-        pl_module.train_per_class_accuracy(mlp_logits.softmax(-1), y)
+        pl_module.train_top1_acc(mlp_logits.softmax(-1), y)
+        pl_module.train_avg_per_class_acc(mlp_logits.softmax(-1), y)
+        pl_module.train_per_class_acc(mlp_logits.softmax(-1), y)
 
         # update finetune weights
         mlp_loss.backward()
@@ -125,10 +126,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         pl_module.log("mlp_loss", mlp_loss, on_step=True, on_epoch=False, prog_bar=True)
 
     def on_train_epoch_end(self, trainer, pl_module):
-        pl_module.log("train_acc", pl_module.top1_train_accuracy, prog_bar=True)
-
+        pl_module.log("train_top1_acc", pl_module.train_top1_acc, prog_bar=True)
         pl_module.log(
-            "train_per_class_acc", pl_module.train_per_class_accuracy, prog_bar=True
+            "train_avg_per_class_acc", pl_module.train_avg_per_class_acc, prog_bar=True
         )
 
     def on_validation_batch_end(
@@ -143,8 +143,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         mlp_logits, mlp_loss, y = self.shared_step(pl_module, batch)
 
-        pl_module.top1_val_accuracy(mlp_logits.softmax(-1), y)
-        pl_module.val_per_class_accuracy(mlp_logits.softmax(-1), y)
+        pl_module.val_top1_acc(mlp_logits.softmax(-1), y)
+        pl_module.val_avg_per_class_acc(mlp_logits.softmax(-1), y)
+        pl_module.val_per_class_acc(mlp_logits.softmax(-1), y)
 
         pl_module.log(
             "online_val_loss",
@@ -156,10 +157,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
     def on_validation_epoch_end(self, trainer, pl_module):
 
-        pl_module.log("val_top1_acc_epoch", pl_module.top1_val_accuracy, prog_bar=True)
-
+        pl_module.log("val_top1_acc", pl_module.val_top1_acc, prog_bar=True)
         pl_module.log(
-            "val_per_class_acc", pl_module.val_per_class_accuracy, prog_bar=True
+            "val_avg_per_class_acc", pl_module.val_avg_per_class_acc, prog_bar=True
         )
 
     def on_save_checkpoint(

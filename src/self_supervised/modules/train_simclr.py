@@ -15,7 +15,8 @@ from src.self_supervised.augmentations.simclr_augs import (
     SimCLRTrainDataTransform,
     SimCLREvalDataTransform,
 )
-
+from configparser import NoOptionError
+from src.self_supervised.callbacks.custom_metrics import PerClassAccuracy
 from src.self_supervised.models.resnets import ResNet50
 from src.self_supervised.models.mlp import MLP
 from pl_bolts.optimizers import LARS
@@ -93,15 +94,18 @@ class ActionClassifier(pl.LightningModule):
         self.val_augmentations = SimCLREvalDataTransform()
 
         # Training metrics
-        self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.train_per_class_accuracy = torchmetrics.Accuracy(
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
         # Validation metrics
-        self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.val_per_class_accuracy = torchmetrics.Accuracy(
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
@@ -133,8 +137,6 @@ class ActionClassifier(pl.LightningModule):
         return loss
 
     def training_step(self, batch, batch_idx):
-
-        # self.show_batch(batch=batch)
         loss = self.shared_step(batch)
         self.log("train_loss", loss, on_step=True, on_epoch=False)
         return loss
@@ -285,6 +287,9 @@ def main():
 
     wand_logger = WandbLogger(offline=True)
 
+    which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
+    per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
+
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
     )
@@ -307,6 +312,7 @@ def main():
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
                     online_evaluator,
+                    per_class_acc_callback,
                 ],
                 logger=wand_logger,
             )
@@ -328,7 +334,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            callbacks=[online_evaluator],
+            callbacks=[online_evaluator, per_class_acc_callback],
             fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
