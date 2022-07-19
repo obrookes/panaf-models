@@ -20,7 +20,7 @@ class BYOLFinetuner(pl.LightningModule):
 
         # TODO: automatically pass model name
         self.backbone = ActionClassifier.load_from_checkpoint(ckpt_path)
-        self.fc = nn.Linear(in_features=256, out_features=out_features)
+        self.fc = nn.Linear(in_features=2048, out_features=out_features)
 
         if self.hparams.freeze_backbone:
             for param in self.backbone.parameters():
@@ -56,7 +56,7 @@ class BYOLFinetuner(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         x, y = batch
-        pred = self(x)
+        pred = self(x["spatial_sample"].permute(0, 2, 1, 3, 4))
 
         self.train_top1_acc(pred, y)
         self.train_avg_per_class_acc(pred, y)
@@ -92,7 +92,7 @@ class BYOLFinetuner(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        pred = self(x)
+        pred = self(x["spatial_sample"].permute(0, 2, 1, 3, 4))
 
         self.val_top1_acc(pred, y)
         self.val_avg_per_class_acc(pred, y)
