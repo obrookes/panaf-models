@@ -291,11 +291,11 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
+        dirpath="checkpoints/simclr/val_top1_acc", monitor="val_top1_acc", mode="max"
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
+        dirpath="checkpoints/simclr/val_per_class_acc",
         monitor="val_avg_per_class_acc",
         mode="max",
     )
