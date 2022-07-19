@@ -2,71 +2,91 @@ import torch
 import argparse
 import configparser
 import torchmetrics
-import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch import nn
-from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import ResNet50, TemporalResNet50
-from class_balanced_loss import CB_loss
+from src.supervised.models import (
+    SoftmaxEmbedderResNet50,
+    TemporalSoftmaxEmbedderResNet50,
+)
+from pytorch_metric_learning.miners import TripletMarginMiner
+from miners import RandomNegativeTripletSelector
+from losses import OnlineReciprocalTripletLoss
+from sklearn.neighbors import KNeighborsClassifier
+from src.supervised.utils.model_initialiser import initialise_triplet_model
+from src.supervised.callbacks.custom_metrics import PerClassAccuracy
+from configparser import NoOptionError
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay, freeze_backbone, samples_per_class):
+    def __init__(
+        self, lr, weight_decay, model_name, freeze_backbone, margin, type_of_triplets
+    ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.spatial_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.dense_model = ResNet50(freeze_backbone=freeze_backbone)
-        self.temporal_model = TemporalResNet50(freeze_backbone=freeze_backbone)
+        self.model = initialise_triplet_model(
+            name=model_name, freeze_backbone=freeze_backbone
+        )
+
+        self.classifier = KNeighborsClassifier(n_neighbors=9)
+
+        self.triplet_miner = TripletMarginMiner(
+            margin=margin, type_of_triplets=type_of_triplets
+        )
+        self.triplet_loss = OnlineReciprocalTripletLoss()  # self.selector
+        self.ce_loss = nn.CrossEntropyLoss()
 
         # Training metrics
-        self.top1_train_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.train_per_class_accuracy = torchmetrics.Accuracy(
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
         # Validation metrics
-        self.top1_val_accuracy = torchmetrics.Accuracy(top_k=1)
-        self.val_per_class_accuracy = torchmetrics.Accuracy(
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
             num_classes=9, average="macro"
         )
+        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
     def forward(self, x):
-        spatial_pred = self.spatial_model(x["spatial_sample"].permute(0, 2, 1, 3, 4))
-        dense_pred = self.dense_model(x["dense_sample"].permute(0, 2, 1, 3, 4))
-        temporal_pred = self.temporal_model(x["flow_sample"].permute(0, 2, 1, 3, 4))
-        pred = (spatial_pred + dense_pred + temporal_pred) / 3
-        return pred
+        emb, pred = self.model(x)
+        return emb, pred
 
     def training_step(self, batch, batch_idx):
+
         x, y = batch
-        pred = self(x)
+        embeddings, preds = self(x)
 
-        top1_train_acc = self.top1_train_accuracy(pred, y)
-        per_class_acc = self.train_per_class_accuracy(pred, y)
+        self.train_top1_acc(preds, y)
+        self.train_avg_per_class_acc(preds, y)
+        self.train_per_class_acc.update(preds, y)
 
-        loss = CB_loss(
-            labels=y,
-            logits=pred,
-            samples_per_cls=self.hparams.samples_per_class,
-            no_of_classes=9,
-            loss_type="focal",
-            beta=0.9999,
-            gamma=2.0,
-            device=self.device,
+        a_idx, p_idx, n_idx = self.triplet_miner(embeddings, y)
+        labels = torch.cat((y[a_idx], y[p_idx], y[n_idx]), dim=0)
+
+        triplet_loss = self.triplet_loss(
+            embeddings[a_idx],
+            embeddings[p_idx],
+            embeddings[n_idx],
+            labels,
         )
+        ce_loss = self.ce_loss(preds, y)
+        loss = 0.01 * triplet_loss + ce_loss
 
         return {"loss": loss}
 
     def training_epoch_end(self, outputs):
 
         # Log epoch acc
-        top1_acc = self.top1_train_accuracy.compute()
         self.log(
-            "train_top1_acc_epoch",
-            top1_acc,
+            "train_top1_acc",
+            self.train_top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -74,10 +94,9 @@ class ActionClassifier(pl.LightningModule):
         )
 
         # Log epoch acc
-        train_per_class_acc = self.train_per_class_accuracy.compute()
         self.log(
-            "train_per_class_acc_epoch",
-            train_per_class_acc,
+            "train_avg_per_class_acc",
+            self.train_avg_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -86,7 +105,7 @@ class ActionClassifier(pl.LightningModule):
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
-            "train_loss_epoch",
+            "train_loss",
             loss,
             logger=True,
             on_epoch=True,
@@ -95,22 +114,25 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def validation_step(self, batch, batch_idx):
+
         x, y = batch
-        pred = self(x)
+        embeddings, preds = self(x)
 
-        self.top1_val_accuracy(pred, y)
-        self.val_per_class_accuracy(pred, y)
+        self.val_top1_acc(preds, y)
+        self.val_avg_per_class_acc(preds, y)
+        self.val_per_class_acc.update(preds, y)
 
-        loss = CB_loss(
-            labels=y,
-            logits=pred,
-            samples_per_cls=self.hparams.samples_per_class,
-            no_of_classes=9,
-            loss_type="focal",
-            beta=0.9999,
-            gamma=2.0,
-            device=self.device,
+        a_idx, p_idx, n_idx = self.triplet_miner(embeddings, y)
+        labels = torch.cat((y[a_idx], y[p_idx], y[n_idx]), dim=0)
+
+        triplet_loss = self.triplet_loss(
+            embeddings[a_idx],
+            embeddings[p_idx],
+            embeddings[n_idx],
+            labels,
         )
+        ce_loss = self.ce_loss(preds, y)
+        loss = 0.01 * triplet_loss + ce_loss
 
         return {"loss": loss}
 
@@ -118,8 +140,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log top-1 acc per epoch
         self.log(
-            "val_top1_acc_epoch",
-            self.top1_val_accuracy,
+            "val_top1_acc",
+            self.val_top1_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -128,8 +150,8 @@ class ActionClassifier(pl.LightningModule):
 
         # Log per class acc per epoch
         self.log(
-            "val_per_class_acc",
-            self.val_per_class_accuracy,
+            "val_avg_per_class_acc",
+            self.val_avg_per_class_acc,
             logger=True,
             on_epoch=True,
             on_step=False,
@@ -155,28 +177,33 @@ def main():
     cfg.read(args.config)
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
-    data_module.setup(stage="fit")
 
-    samples_by_class = data_module.train_dataset.samples_by_class
-    samples_by_class = dict(sorted(samples_by_class.items()))
-    samples_by_class = [i for i in samples_by_class.values()]
+    data_type = cfg.get("dataset", "type")
+    margin = cfg.getfloat("triplets", "margin")
+    type_of_triplets = cfg.get("triplets", "type_of_triplets")
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
-        samples_per_class=samples_by_class,
+        margin=margin,
+        type_of_triplets=type_of_triplets,
     )
-
     wand_logger = WandbLogger(offline=True)
 
+    which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
+    per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
+
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc_epoch", mode="max"
+        dirpath="checkpoints/val_top1_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        monitor="val_top1_acc",
+        mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
-        monitor="val_per_class_acc_epoch",
+        dirpath="checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        monitor="val_per_class_acc",
         mode="max",
     )
 
@@ -191,6 +218,7 @@ def main():
                 callbacks=[
                     val_top1_acc_checkpoint_callback,
                     val_per_class_acc_checkpoint_callback,
+                    per_class_acc_callback,
                 ],
                 logger=wand_logger,
             )

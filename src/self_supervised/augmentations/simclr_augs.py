@@ -6,8 +6,12 @@ from kornia.augmentation import (
     ColorJitter,
     RandomResizedCrop,
     RandomHorizontalFlip,
+    RandomVerticalFlip,
+    RandomPerspective,
     RandomGrayscale,
+    RandomAffine,
     Resize,
+    RandomGaussianBlur,
 )
 from kornia.filters import gaussian_blur2d
 from einops import rearrange
@@ -27,39 +31,59 @@ class SimCLRTrainDataTransform(nn.Module):
         self.input_height = input_height
         self.gaussian_blur = gaussian_blur
 
+        self.kernel_size = 0.1 * self.input_height
+        self.sigma = 1.0
+
         self.transforms = nn.Sequential(
-            RandomResizedCrop(size=(self.input_height, self.input_height), same_on_batch=True),
+            RandomResizedCrop(
+                size=(self.input_height, self.input_height), p=0.5, same_on_batch=True
+            ),
             RandomHorizontalFlip(p=0.5, same_on_batch=True),
+            RandomVerticalFlip(p=0.5, same_on_batch=True),
             ColorJitter(
                 0.8 * self.jitter_strength,
                 0.8 * self.jitter_strength,
                 0.8 * self.jitter_strength,
                 0.2 * self.jitter_strength,
-                p=0.8,
+                p=0.5,
                 same_on_batch=True,
             ),
             RandomGrayscale(p=0.2, same_on_batch=True),
-            GaussianBlur(kernel_size=0.1 * self.input_height)
+            RandomGaussianBlur(
+                kernel_size=(math.ceil(self.kernel_size), math.ceil(self.kernel_size)),
+                sigma=(self.sigma, self.sigma),
+                p=0.5,
+                same_on_batch=True,
+            ),
         )
 
     def forward(self, sample):
-
         with torch.no_grad():
-            x_i = self.transforms(sample)
-            x_j = self.transforms(sample)
+            b_size, t, c, w, h = sample.shape
+            x = rearrange(sample, "b t c w h -> (b t) c w h")
 
-            x_i = rearrange(x_i, "(b t) c w h -> b c t w h", b=2)
-            x_j = rearrange(x_j, "(b t) c w h -> b c t w h", b=2)
+            x_i = self.transforms(x)
+            x_j = self.transforms(x)
+
+            x_i = rearrange(x_i, "(b t) c w h -> b c t w h", b=b_size)
+            x_j = rearrange(x_j, "(b t) c w h -> b c t w h", b=b_size)
 
         return x_i, x_j
+
+    """
+    => Removed from train augs
+    RandomResizedCrop(
+        size=(self.input_height, self.input_height), same_on_batch=True
+    ),
+    """
 
 
 class GaussianBlur(nn.Module):
     # Implements Gaussian blur as described in the SimCLR paper
     def __init__(self, kernel_size, p=0.5, min=0.1, max=2.0):
-        
+
         super().__init__()
-        
+
         self.min = min
         self.max = max
 
@@ -92,12 +116,14 @@ class SimCLREvalDataTransform(nn.Module):
         self.transforms = nn.Sequential(Resize((self.input_height, self.input_height)))
 
     def forward(self, sample):
-
         with torch.no_grad():
-            x_i = self.transforms(sample)
-            x_j = self.transforms(sample)
+            b_size, t, c, w, h = sample.shape
+            x = rearrange(sample, "b t c w h -> (b t) c w h")
 
-            x_i = rearrange(x_i, "(b t) c w h -> b c t w h", b=2)
-            x_j = rearrange(x_j, "(b t) c w h -> b c t w h", b=2)
+            x_i = self.transforms(x)
+            x_j = self.transforms(x)
+
+            x_i = rearrange(x_i, "(b t) c w h -> b c t w h", b=b_size)
+            x_j = rearrange(x_j, "(b t) c w h -> b c t w h", b=b_size)
 
         return x_i, x_j

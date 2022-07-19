@@ -1,5 +1,4 @@
 import torch
-import torchmetrics
 from contextlib import contextmanager
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 from pytorch_lightning import Callback, LightningModule, Trainer
@@ -7,28 +6,12 @@ from pytorch_lightning.utilities import rank_zero_warn
 from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.optim import Optimizer
-from torchmetrics.functional import accuracy
-
 from pl_bolts.models.self_supervised.evaluator import SSLEvaluator
 
 
 class SSLOnlineEvaluator(Callback):  # pragma: no cover
-    """Attaches a MLP for fine-tuning using the standard self-supervised protocol.
-
-    Example::
-
-        # your datamodule must have 2 attributes
-        dm = DataModule()
-        dm.num_classes = ... # the num of classes in the datamodule
-        dm.name = ... # name of the datamodule (e.g. ImageNet, STL10, CIFAR10)
-
-        # your model must have 1 attribute
-        model = Model()
-        model.z_dim = ... # the representation dim
-
-        online_eval = SSLOnlineEvaluator(
-            z_dim=model.z_dim
-        )
+    """
+    Attaches a MLP for fine-tuning using the standard self-supervised protocol.
     """
 
     def __init__(
@@ -37,7 +20,7 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         drop_p: float = 0.2,
         hidden_dim: Optional[int] = None,
         num_classes: Optional[int] = None,
-        dataset: Optional[str] = None,
+        strategy: Optional[str] = None,
     ):
         """
         Args:
@@ -53,10 +36,8 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         self.optimizer: Optional[Optimizer] = None
         self.online_evaluator: Optional[SSLEvaluator] = None
-        self.num_classes: Optional[int] = None
-        self.dataset: Optional[str] = None
         self.num_classes: Optional[int] = num_classes
-        self.dataset: Optional[str] = dataset
+        self.strategy: Optional[str] = strategy
 
         self._recovered_callback_state: Optional[Dict[str, Any]] = None
 
@@ -65,12 +46,8 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
     ) -> None:
         if self.num_classes is None:
             self.num_classes = trainer.datamodule.num_classes
-        if self.dataset is None:
-            self.dataset = trainer.datamodule.name
 
-    def on_pretrain_routine_start(
-        self, trainer: Trainer, pl_module: LightningModule
-    ) -> None:
+    def on_fit_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
         # must move to device after setup, as during setup, pl_module is still on cpu
         self.online_evaluator = SSLEvaluator(
             n_input=self.z_dim,
@@ -79,30 +56,12 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
             n_hidden=self.hidden_dim,
         ).to(pl_module.device)
 
-        # switch fo PL compatibility reasons
-        accel = (
-            trainer.accelerator_connector
-            if hasattr(trainer, "accelerator_connector")
-            else trainer._accelerator_connector
-        )
+        if self.strategy == "ddp":
+            from torch.nn.parallel import DistributedDataParallel as DDP
 
-        if not accel.is_distributed:
-            if accel.use_ddp:
-                from torch.nn.parallel import DistributedDataParallel as DDP
-
-                self.online_evaluator = DDP(
-                    self.online_evaluator, device_ids=[pl_module.device]
-                )
-            elif accel.use_dp:
-                from torch.nn.parallel import DataParallel as DP
-
-                self.online_evaluator = DP(
-                    self.online_evaluator, device_ids=[pl_module.device]
-                )
-            else:
-                rank_zero_warn(
-                    "Does not support this type of distributed accelerator. The online evaluator will not sync."
-                )
+            self.online_evaluator = DDP(
+                self.online_evaluator, device_ids=[pl_module.device]
+            )
 
         self.optimizer = torch.optim.Adam(self.online_evaluator.parameters(), lr=1e-4)
 
@@ -118,9 +77,6 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         self, batch: Sequence, device: Union[str, torch.device]
     ) -> Tuple[Tensor, Tensor]:
         # get the labeled batch
-        if self.dataset == "stl10":
-            labeled_batch = batch[1]
-            batch = labeled_batch
 
         _, _, x, y = batch
 
@@ -158,8 +114,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         mlp_logits, mlp_loss, y = self.shared_step(pl_module, batch)
 
-        pl_module.top1_train_accuracy(mlp_logits.softmax(-1), y)
-        pl_module.train_per_class_accuracy(mlp_logits.softmax(-1), y)
+        pl_module.train_top1_acc(mlp_logits.softmax(-1), y)
+        pl_module.train_avg_per_class_acc(mlp_logits.softmax(-1), y)
+        pl_module.train_per_class_acc.update(mlp_logits.softmax(-1), y)
 
         # update finetune weights
         mlp_loss.backward()
@@ -169,10 +126,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
         pl_module.log("mlp_loss", mlp_loss, on_step=True, on_epoch=False, prog_bar=True)
 
     def on_train_epoch_end(self, trainer, pl_module):
-        pl_module.log("train_acc", pl_module.top1_train_accuracy, prog_bar=True)
-
+        pl_module.log("train_top1_acc", pl_module.train_top1_acc, prog_bar=True)
         pl_module.log(
-            "train_per_class_acc", pl_module.train_per_class_accuracy, prog_bar=True
+            "train_avg_per_class_acc", pl_module.train_avg_per_class_acc, prog_bar=True
         )
 
     def on_validation_batch_end(
@@ -187,8 +143,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
         mlp_logits, mlp_loss, y = self.shared_step(pl_module, batch)
 
-        pl_module.top1_val_accuracy(mlp_logits.softmax(-1), y)
-        pl_module.val_per_class_accuracy(mlp_logits.softmax(-1), y)
+        pl_module.val_top1_acc(mlp_logits.softmax(-1), y)
+        pl_module.val_avg_per_class_acc(mlp_logits.softmax(-1), y)
+        pl_module.val_per_class_acc.update(mlp_logits.softmax(-1), y)
 
         pl_module.log(
             "online_val_loss",
@@ -200,10 +157,9 @@ class SSLOnlineEvaluator(Callback):  # pragma: no cover
 
     def on_validation_epoch_end(self, trainer, pl_module):
 
-        pl_module.log("val_top1_acc_epoch", pl_module.top1_val_accuracy, prog_bar=True)
-
+        pl_module.log("val_top1_acc", pl_module.val_top1_acc, prog_bar=True)
         pl_module.log(
-            "val_per_class_acc", pl_module.val_per_class_accuracy, prog_bar=True
+            "val_avg_per_class_acc", pl_module.val_avg_per_class_acc, prog_bar=True
         )
 
     def on_save_checkpoint(

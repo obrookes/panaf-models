@@ -1,13 +1,13 @@
-import math
+import copy
 import torch
 import argparse
-import torchvision
 import configparser
 import torchmetrics
 import pytorch_lightning as pl
-from torch import Tensor
+import torch.nn.functional as F
+from torch import nn
 from einops import rearrange
-from kornia import tensor_to_image
+from typing import Callable
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -18,11 +18,7 @@ from src.self_supervised.augmentations.simclr_augs import (
 from configparser import NoOptionError
 from src.self_supervised.callbacks.custom_metrics import PerClassAccuracy
 from src.self_supervised.models.resnets import ResNet50
-from src.self_supervised.models.mlp import MLP
-from pl_bolts.optimizers import LARS
-from pl_bolts.optimizers.lr_scheduler import linear_warmup_decay
 from src.self_supervised.callbacks.ssl import SSLOnlineEvaluator
-import matplotlib.pyplot as plt
 
 
 class SyncFunction(torch.autograd.Function):
@@ -60,8 +56,9 @@ class ActionClassifier(pl.LightningModule):
         batch_size: int,
         num_nodes: int = 1,
         arch: str = "resnet50",
-        hidden_mlp: int = 2048,
-        feat_dim: int = 128,
+        feature_dim: int = 2048,
+        hidden_mlp: int = 4096,
+        feat_dim: int = 256,
         warmup_epochs: int = 10,
         max_epochs: int = 100,
         temperature: float = 0.1,
@@ -73,21 +70,43 @@ class ActionClassifier(pl.LightningModule):
         learning_rate: float = 1e-3,
         final_lr: float = 0.0,
         weight_decay: float = 1e-6,
+        mmt: float = 0.99,
+        norm: Callable = nn.SyncBatchNorm,
         **kwargs
     ):
         super().__init__()
 
         self.save_hyperparameters()
 
-        self.encoder = ResNet50()
-        self.projection = MLP()
+        self.mmt = mmt
+        self.feature_dim = feature_dim
 
-        global_batch_size = (
-            self.hparams.num_nodes * self.hparams.gpus * self.hparams.batch_size
-            if self.hparams.gpus > 0
-            else self.hparams.batch_size
+        backbone = ResNet50()
+        projector = nn.Sequential(
+            nn.Linear(feature_dim, hidden_mlp, bias=False),
+            norm(hidden_mlp),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_mlp, feat_dim, bias=True),
         )
-        self.train_iters_per_epoch = self.hparams.num_samples // global_batch_size
+
+        if projector is not None:
+            backbone = nn.Sequential(
+                backbone,
+                projector,
+            )
+
+        self.backbone = backbone
+        self.backbone_mmt = copy.deepcopy(backbone)
+
+        for p in self.backbone_mmt.parameters():
+            p.requires_grad = False
+
+        self.predictor = nn.Sequential(
+            nn.Linear(feat_dim, hidden_mlp, bias=False),
+            norm(hidden_mlp),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_mlp, feat_dim, bias=True),
+        )
 
         # Instantiate augmentations
         self.train_augmentations = SimCLRTrainDataTransform()
@@ -107,6 +126,62 @@ class ActionClassifier(pl.LightningModule):
         )
         self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
+    def sim_loss(self, q, k):
+        """
+        Similarity loss for byol.
+        Args:
+            q and k (nn.tensor): inputs to calculate the similarity, expected to have
+                the same shape of `N x C`.
+        """
+        similarity = torch.einsum("nc,nc->n", [q, k])
+        loss = -similarity.mean()
+        return loss
+
+    def update_mmt(self, mmt: float):
+        """
+        Update the momentum. This function can be used to perform momentum annealing.
+        Args:
+            mmt (float): update the momentum.
+        """
+        self.mmt = mmt
+
+    def get_mmt(self) -> float:
+        """
+        Get the momentum. This function can be used to perform momentum annealing.
+        """
+        return self.mmt
+
+    @torch.no_grad()
+    def _momentum_update_backbone(self):
+        """
+        Momentum update on the backbone.
+        """
+        for param, param_mmt in zip(
+            self.backbone.parameters(), self.backbone_mmt.parameters()
+        ):
+            param_mmt.data = param_mmt.data * self.mmt + param.data * (1.0 - self.mmt)
+
+    @torch.no_grad()
+    def forward_backbone_mmt(self, x):
+        """
+        Forward momentum backbone.
+        Args:
+            x (tensor): input to be forwarded.
+        """
+        with torch.no_grad():
+            proj = self.backbone_mmt(x)
+        return F.normalize(proj, dim=1)
+
+    def forward_backbone(self, x):
+        """
+        Forward backbone.
+        Args:
+            x (tensor): input to be forwarded.
+        """
+        proj = self.backbone(x)
+        pred = self.predictor(proj)
+        return F.normalize(pred, dim=1)
+
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
         x = x["spatial_sample"]
@@ -121,19 +196,22 @@ class ActionClassifier(pl.LightningModule):
         return x1, x2, x, y
 
     def forward(self, x):
-        return self.encoder(x)
+        return self.backbone[0](x)
 
     def shared_step(self, batch):
         x1, x2, x, y = batch
 
-        h1 = self.encoder(x1)
-        h2 = self.encoder(x2)
+        pred_1 = self.forward_backbone(x1)
+        pred_2 = self.forward_backbone(x2)
 
-        z1 = self.projection(h1)
-        z2 = self.projection(h2)
+        with torch.no_grad():
+            self._momentum_update_backbone()
+            proj_mmt_1 = self.forward_backbone_mmt(x1)
+            proj_mmt_2 = self.forward_backbone_mmt(x2)
 
-        loss = self.nt_xent_loss(z1, z2, self.hparams.temperature)
-
+        loss = (
+            self.sim_loss(pred_1, proj_mmt_2) + self.sim_loss(pred_2, proj_mmt_1)
+        ) / 2
         return loss
 
     def training_step(self, batch, batch_idx):
@@ -146,118 +224,12 @@ class ActionClassifier(pl.LightningModule):
         self.log("val_loss", loss, on_step=False, on_epoch=True, sync_dist=True)
         return loss
 
-    def exclude_from_wt_decay(
-        self, named_params, weight_decay, skip_list=("bias", "bn")
-    ):
-        params = []
-        excluded_params = []
-
-        for name, param in named_params:
-            if not param.requires_grad:
-                continue
-            elif any(layer_name in name for layer_name in skip_list):
-                excluded_params.append(param)
-            else:
-                params.append(param)
-
-        return [
-            {"params": params, "weight_decay": weight_decay},
-            {
-                "params": excluded_params,
-                "weight_decay": 0.0,
-            },
-        ]
-
     def configure_optimizers(self):
-        if self.hparams.exclude_bn_bias:
-            params = self.hparams.exclude_from_wt_decay(
-                self.hparams.named_parameters(), weight_decay=self.hparams.weight_decay
-            )
-        else:
-            params = self.parameters()
-
-        if self.hparams.optimizer == "lars":
-            optimizer = LARS(
-                params,
-                lr=self.hparams.learning_rate,
-                momentum=0.9,
-                weight_decay=self.hparams.weight_decay,
-                trust_coefficient=0.001,
-            )
-        elif self.hparams.optimizer == "adam":
-            optimizer = torch.optim.Adam(
-                params,
-                lr=self.hparams.learning_rate,
-                weight_decay=self.hparams.weight_decay,
-            )
-
-        warmup_steps = self.train_iters_per_epoch * self.hparams.warmup_epochs
-        total_steps = self.train_iters_per_epoch * self.hparams.max_epochs
-
-        scheduler = {
-            "scheduler": torch.optim.lr_scheduler.LambdaLR(
-                optimizer,
-                linear_warmup_decay(warmup_steps, total_steps, cosine=True),
-            ),
-            "interval": "step",
-            "frequency": 1,
-        }
-
-        return [optimizer], [scheduler]
-
-    def nt_xent_loss(self, out_1, out_2, temperature, eps=1e-6):
-        """
-        assume out_1 and out_2 are normalized
-        out_1: [batch_size, dim]
-        out_2: [batch_size, dim]
-        """
-        # gather representations in case of distributed training
-        # out_1_dist: [batch_size * world_size, dim]
-        # out_2_dist: [batch_size * world_size, dim]
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            out_1_dist = SyncFunction.apply(out_1)
-            out_2_dist = SyncFunction.apply(out_2)
-        else:
-            out_1_dist = out_1
-            out_2_dist = out_2
-
-        # out: [2 * batch_size, dim]
-        # out_dist: [2 * batch_size * world_size, dim]
-        out = torch.cat([out_1, out_2], dim=0)
-        out_dist = torch.cat([out_1_dist, out_2_dist], dim=0)
-
-        # cov and sim: [2 * batch_size, 2 * batch_size * world_size]
-        # neg: [2 * batch_size]
-        cov = torch.mm(out, out_dist.t().contiguous())
-        sim = torch.exp(cov / temperature)
-        neg = sim.sum(dim=-1)
-
-        # from each row, subtract e^(1/temp) to remove similarity measure for x1.x1
-        row_sub = Tensor(neg.shape).fill_(math.e ** (1 / temperature)).to(neg.device)
-        neg = torch.clamp(neg - row_sub, min=eps)  # clamp for numerical stability
-
-        # Positive similarity, pos becomes [2 * batch_size]
-        pos = torch.exp(torch.sum(out_1 * out_2, dim=-1) / temperature)
-        pos = torch.cat([pos, pos], dim=0)
-
-        loss = -torch.log(pos / (neg + eps)).mean()
-
-        return loss
-
-    def show_batch(self, batch, win_size=(15, 15)):
-        def _to_vis(data):
-            return tensor_to_image(torchvision.utils.make_grid(data, nrow=5))
-
-        x_i, x_j = batch
-        x_i = rearrange(x_i, "b c t w h -> (b t) c w h")
-        x_j = rearrange(x_j, "b c t w h -> (b t) c w h")
-        # get a batch from the training set: try with `val_datlaoader` :)
-        # use matplotlib to visualize
-        plt.figure(figsize=win_size)
-        plt.imshow(_to_vis(x_i))
-        plt.figure(figsize=win_size)
-        plt.imshow(_to_vis(x_j))
-        plt.show()
+        optimizer = torch.optim.Adam(
+            self.parameters(),
+            lr=self.hparams.learning_rate,
+        )
+        return optimizer
 
 
 def main():
@@ -291,11 +263,11 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/simclr/val_top1_acc", monitor="val_top1_acc", mode="max"
+        dirpath="checkpoints/byol/val_top1_acc", monitor="val_top1_acc", mode="max"
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/simclr/val_per_class_acc",
+        dirpath="checkpoints/byol/val_per_class_acc",
         monitor="val_avg_per_class_acc",
         mode="max",
     )
@@ -334,7 +306,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            callbacks=[online_evaluator, per_class_acc_callback],
+            callbacks=[per_class_acc_callback],
             fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
