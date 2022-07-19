@@ -35,6 +35,9 @@ class SimCLRTrainDataTransform(nn.Module):
         self.sigma = 1.0
 
         self.transforms = nn.Sequential(
+            RandomResizedCrop(
+                size=(self.input_height, self.input_height), p=0.5, same_on_batch=True
+            ),
             RandomHorizontalFlip(p=0.5, same_on_batch=True),
             RandomVerticalFlip(p=0.5, same_on_batch=True),
             ColorJitter(
