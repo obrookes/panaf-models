@@ -41,7 +41,7 @@ class ActionClassifier(pl.LightningModule):
 
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
-        x = rearrange(x['spatial_sample'], "b t c w h -> b c t w h")
+        x = rearrange(x["spatial_sample"], "b t c w h -> b c t w h")
         x = resize(input=x, size=(224, 224))
         return x, y
 
@@ -49,7 +49,7 @@ class ActionClassifier(pl.LightningModule):
 
         x, y = batch
 
-        pred = self.mvit(x)
+        pred = self.mvit(x.contiguous())
         loss = self.ce_loss(pred, y)
 
         self.train_top1_acc(pred, y)
@@ -91,7 +91,7 @@ class ActionClassifier(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         x, y = batch
-        pred = self.mvit(x)
+        pred = self.mvit(x.contiguous())
         loss = self.ce_loss(pred, y)
 
         self.val_top1_acc(pred, y)
@@ -154,11 +154,13 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
+        dirpath=f"checkpoints/{cfg.get('model', 'name')}/val_top1_acc",
+        monitor="val_top1_acc",
+        mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
+        dirpath=f"checkpoints/{cfg.get('model', 'name')}/val_per_class_acc",
         monitor="val_avg_per_class_acc",
         mode="max",
     )
@@ -192,10 +194,15 @@ def main():
         trainer = pl.Trainer(
             gpus=cfg.getint("trainer", "gpus"),
             num_nodes=cfg.getint("trainer", "num_nodes"),
-            strategy=cfg.get("trainer", "strategy"),
+            # strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=10,
+            callbacks=[
+                val_top1_acc_checkpoint_callback,
+                val_per_class_acc_checkpoint_callback,
+                per_class_acc_callback,
+            ],
+            fast_dev_run=2,
         )
     trainer.fit(model=model, datamodule=data_module)
 
