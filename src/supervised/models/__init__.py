@@ -22,4 +22,6 @@ from .multi_stream import (
     ThreeStreamNetworkEmbedderSoftmax,
 )
 
-from .slowfast50 import SlowFast50
+from .slowfast import SlowFast
+
+from .mvit import MViT
