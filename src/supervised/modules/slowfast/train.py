@@ -7,18 +7,19 @@ from torch import nn
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import SlowFast50
+from src.supervised.models import SlowFast
 from src.supervised.callbacks.custom_metrics import PerClassAccuracy
 from configparser import NoOptionError
 
 
 class ActionClassifier(pl.LightningModule):
-    def __init__(self, lr, weight_decay):
+    def __init__(self, lr, weight_decay, model_name):
         super().__init__()
 
         self.save_hyperparameters()
-
-        self.slowfast = SlowFast50()
+        
+        print(f"==> Initialising {model_name}!")
+        self.slowfast = SlowFast(model_name=model_name)
 
         self.ce_loss = nn.CrossEntropyLoss()
 
@@ -150,6 +151,7 @@ def main():
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
+        model_name=cfg.get("model", "name"),
     )
 
     wand_logger = WandbLogger(offline=True)
