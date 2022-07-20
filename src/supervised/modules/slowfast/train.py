@@ -17,7 +17,7 @@ class ActionClassifier(pl.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
-        
+
         print(f"==> Initialising {model_name}!")
         self.slowfast = SlowFast(model_name=model_name)
 
@@ -160,11 +160,13 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc", monitor="val_top1_acc", mode="max"
+        dirpath=f"checkpoints/{cfg.get('model', 'name')}/val_top1_acc",
+        monitor="val_top1_acc",
+        mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc",
+        dirpath=f"checkpoints/{cfg.get('model', 'name')}/val_per_class_acc",
         monitor="val_avg_per_class_acc",
         mode="max",
     )
