@@ -196,13 +196,13 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_top1_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        dirpath=f"checkpoints/val_top1_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
         monitor="val_top1_acc",
         mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        dirpath=f"checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
         monitor="val_per_class_acc",
         mode="max",
     )
