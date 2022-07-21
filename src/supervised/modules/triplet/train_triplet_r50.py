@@ -203,7 +203,7 @@ def main():
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
         dirpath=f"checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
-        monitor="val_per_class_acc",
+        monitor="val_avg_per_class_acc",
         mode="max",
     )
 
