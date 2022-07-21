@@ -42,7 +42,7 @@ class ActionClassifier(pl.LightningModule):
     def on_after_batch_transfer(self, batch, dataloader_idx):
         x, y = batch
         x = rearrange(x["spatial_sample"], "b t c w h -> b c t w h")
-        x = resize(input=x, size=(224, 224))
+        x = resize(input=x.contiguous(), size=(224, 224))
         return x, y
 
     def training_step(self, batch, batch_idx):
