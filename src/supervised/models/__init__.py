@@ -6,7 +6,6 @@ from .resnet50 import (
     TemporalSoftmaxEmbedderResNet50,
     ResNet50Embedder,
     TemporalResNet50Embedder,
-    
 )
 
 from .multi_stream import (
@@ -22,6 +21,6 @@ from .multi_stream import (
     ThreeStreamNetworkEmbedderSoftmax,
 )
 
-from .slowfast import SlowFast
+from .slowfast import SlowFast, SlowFastEmbedder
 
-from .mvit import MViT
+from .mvit import MViT, MViTEmbedder

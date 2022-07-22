@@ -7,6 +7,7 @@ from src.supervised.models import (
     SpatialStreamNetworkEmbedderSoftmax,
     DualStreamNetworkEmbedderSoftmax,
     ThreeStreamNetworkEmbedderSoftmax,
+    SlowFastEmbedder,
 )
 
 
@@ -43,6 +44,10 @@ def initialise_triplet_model(name, freeze_backbone, out_features=9):
         model = ThreeStreamNetworkEmbedderSoftmax(
             freeze_backbone=freeze_backbone, out_features=out_features
         )
+    elif name == "slowfast_r50":
+        model = SlowFastEmbedder(model_name=name)
+    elif name == "slowfast_r101":
+        model = SlowFastEmbedder(model_name=name)
     else:
         raise NameError(f"The model initialisation: {name} does not exist!")
     return model
