@@ -175,7 +175,7 @@ class ActionClassifier(pl.LightningModule):
         )
 
         scheduler = {
-            "scheduler": torch.optim.lr_scheduler.CosineAnnealingLR(
+            "scheduler": torch.optim.lr_scheduler.LambdaLR(
                 optimizer,
                 linear_warmup_decay(
                     self.hparams.warmup_steps, self.total_steps, cosine=True
