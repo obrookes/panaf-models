@@ -3,18 +3,11 @@ import argparse
 import configparser
 import torchmetrics
 import pytorch_lightning as pl
-import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
-from typing import Callable
-import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from panaf.datamodules import SupervisedPanAfPairsDataModule
-from src.self_supervised.augmentations.simclr_augs import (
-    SimCLRTrainDataTransform,
-    SimCLREvalDataTransform,
-)
 from configparser import NoOptionError
 from src.self_supervised.callbacks.custom_metrics import PerClassAccuracy
 from src.self_supervised.models.resnets import ResNet50
@@ -206,13 +199,6 @@ def main():
         num_nodes=cfg.getint("trainer", "num_nodes"),
     )
 
-    online_evaluator = SSLOnlineEvaluator(
-        drop_p=0.0,
-        hidden_dim=None,
-        z_dim=2048,
-        num_classes=9,
-    )
-
     wand_logger = WandbLogger(offline=True)
 
     which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
@@ -243,6 +229,11 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                callbacks=[
+                    val_per_class_acc_checkpoint_callback,
+                    val_top1_acc_checkpoint_callback,
+                    online_evaluator,
+                ],
                 logger=wand_logger,
             )
         else:
@@ -262,7 +253,11 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            callbacks=[online_evaluator],
+            callbacks=[
+                val_per_class_acc_checkpoint_callback,
+                val_top1_acc_checkpoint_callback,
+                online_evaluator,
+            ],
             fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
