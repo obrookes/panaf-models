@@ -8,6 +8,7 @@ from src.supervised.models import (
     DualStreamNetworkEmbedderSoftmax,
     ThreeStreamNetworkEmbedderSoftmax,
     SlowFastEmbedder,
+    MViT,
 )
 
 
@@ -26,6 +27,10 @@ def initialise_model(name, freeze_backbone, out_features=9):
         model = ThreeStreamNetworkSF(
             freeze_backbone=freeze_backbone, out_features=out_features
         )
+    elif name == "mvit_base_16x4":
+        model = MViT(model_name=name, out_features=out_features)
+    elif name == "mvit_base_32x3":
+        model = MViT(model_name=name, out_features=out_features)
     else:
         raise NameError(f"The model initialisation: {name} does not exist!")
     return model

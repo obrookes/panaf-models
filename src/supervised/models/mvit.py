@@ -8,7 +8,7 @@ from pytorchvideo.models.vision_transformers import (
 
 
 class MViT(nn.Module):
-    def __init__(self, model_name="mvit_base_16x4"):
+    def __init__(self, model_name="mvit_base_16x4", out_features=9):
 
         """
         Other models:
@@ -22,7 +22,7 @@ class MViT(nn.Module):
             "facebookresearch/pytorchvideo:main", model=model_name, pretrained=True
         )
         self.model.head = create_vit_basic_head(in_features=768, out_features=128)
-        self.fc = nn.Linear(in_features=128, out_features=9)
+        self.fc = nn.Linear(in_features=128, out_features=out_features)
 
     def forward(self, x):
         output = self.model(x)
