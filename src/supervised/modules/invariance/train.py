@@ -18,7 +18,7 @@ from src.self_supervised.augmentations.simclr_augs import (
 from configparser import NoOptionError
 from src.self_supervised.callbacks.custom_metrics import PerClassAccuracy
 from src.self_supervised.models.resnets import ResNet50
-from src.self_supervised.callbacks.ssl import SSLOnlineEvaluator
+from src.supervised.callbacks.online_evaluator import SSLOnlineEvaluator
 from pl_bolts.optimizers import LARS
 from pl_bolts.optimizers.lr_scheduler import linear_warmup_decay
 
@@ -74,6 +74,23 @@ class ActionClassifier(pl.LightningModule):
         self.train_iters_per_epoch = self.hparams.num_samples // self.global_batch_size
         self.total_steps = self.train_iters_per_epoch * self.hparams.max_epochs
 
+        # Training metrics
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
+        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
+        # Validation metrics
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
+        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
+
+    def forward(self, x):
+        return self.left_model(x)
+
     def _regression_loss(self, x, y, epsilon: float = 1e-5):
         """Cosine-similarity based loss."""
         normed_x = x / torch.unsqueeze(torch.linalg.norm(x, dim=1, ord=2), axis=-1)
@@ -90,7 +107,7 @@ class ActionClassifier(pl.LightningModule):
         a, p, y = batch
         a = rearrange(a["spatial_sample"], "b t c w h -> b c t w h")
         p = rearrange(p["spatial_sample"], "b t c w h -> b c t w h")
-        return a, p
+        return a, p, y
 
     def forward_left(self, x):
         emb = self.left_model(x)
@@ -124,7 +141,7 @@ class ActionClassifier(pl.LightningModule):
         return loss
 
     def shared_step(self, batch):
-        a, p = batch
+        a, p, y = batch
         left_loss = self.forward_left2right(a, p)
         right_loss = self.forward_right2left(a, p)
 
@@ -201,6 +218,13 @@ def main():
     which_classes = cfg.get("dataset", "classes") if not NoOptionError else "all"
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
+    online_evaluator = SSLOnlineEvaluator(
+        z_dim=2048,
+        hidden_dim=None,
+        drop_p=0.0,
+        num_classes=9,
+    )
+
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/byol/val_top1_acc", monitor="val_top1_acc", mode="max"
     )
@@ -238,6 +262,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            callbacks=[online_evaluator],
             fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
