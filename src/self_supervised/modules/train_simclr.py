@@ -337,7 +337,9 @@ def main():
             callbacks=[online_evaluator, per_class_acc_callback],
             fast_dev_run=5,
         )
-    trainer.fit(model=model, datamodule=data_module)
+
+    ckpt = cfg.get("trainer", "ckpt") if not NoOptionError else None
+    trainer.fit(model=model, datamodule=data_module, ckpt_path=ckpt)
 
 
 if __name__ == "__main__":
