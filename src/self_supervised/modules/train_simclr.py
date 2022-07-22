@@ -73,7 +73,7 @@ class ActionClassifier(pl.LightningModule):
         learning_rate: float = 1e-3,
         final_lr: float = 0.0,
         weight_decay: float = 1e-6,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
 
@@ -339,6 +339,7 @@ def main():
         )
 
     ckpt = cfg.get("trainer", "ckpt") if not NoOptionError else None
+    print(f"==> Resuming training from {ckpt}")
     trainer.fit(model=model, datamodule=data_module, ckpt_path=ckpt)
 
 
