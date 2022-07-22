@@ -5,7 +5,7 @@ from pytorchvideo.models.head import create_res_basic_head
 
 
 class ResNet50(nn.Module):
-    def __init__(self, freeze_backbone=False):
+    def __init__(self, freeze_backbone=False, out_features=2048):
 
         super().__init__()
         self.freeze_backbone = freeze_backbone
@@ -15,7 +15,9 @@ class ResNet50(nn.Module):
         )
 
         self.backbone = nn.Sequential(*list(pretrained_model.children())[0][:-1])
-        self.res_head = create_res_basic_head(in_features=2048, out_features=2048)
+        self.res_head = create_res_basic_head(
+            in_features=2048, out_features=out_features
+        )
 
         if self.freeze_backbone:
             for param in self.backbone.parameters():
@@ -24,6 +26,3 @@ class ResNet50(nn.Module):
     def forward(self, x):
         x = self.res_head(self.backbone(x))
         return x
-
-
-
