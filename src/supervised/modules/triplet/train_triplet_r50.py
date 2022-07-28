@@ -3,26 +3,30 @@ import argparse
 import configparser
 import torchmetrics
 import pytorch_lightning as pl
-from torch import nn
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from panaf.datamodules import SupervisedPanAfDataModule
-from src.supervised.models import (
-    SoftmaxEmbedderResNet50,
-    TemporalSoftmaxEmbedderResNet50,
-)
-from pytorch_metric_learning.miners import TripletMarginMiner
-from miners import RandomNegativeTripletSelector
-from losses import OnlineReciprocalTripletLoss
 from sklearn.neighbors import KNeighborsClassifier
 from src.supervised.utils.model_initialiser import initialise_triplet_model
+from src.supervised.utils.miner_initialiser import initialise_miner
+from src.supervised.utils.loss_initialiser import initialise_loss
 from src.supervised.callbacks.custom_metrics import PerClassAccuracy
 from configparser import NoOptionError
+
+# from losses import OnlineReciprocalTripletLoss
 
 
 class ActionClassifier(pl.LightningModule):
     def __init__(
-        self, lr, weight_decay, model_name, freeze_backbone, margin, type_of_triplets
+        self,
+        lr,
+        weight_decay,
+        model_name,
+        freeze_backbone,
+        miner_name,
+        margin,
+        type_of_triplets,
+        loss_name,
     ):
         super().__init__()
 
@@ -34,11 +38,11 @@ class ActionClassifier(pl.LightningModule):
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
-        self.triplet_miner = TripletMarginMiner(
-            margin=margin, type_of_triplets=type_of_triplets
+        self.triplet_miner = initialise_miner(
+            name=miner_name, margin=margin, type_of_triplets=type_of_triplets
         )
-        self.triplet_loss = OnlineReciprocalTripletLoss()  # self.selector
-        self.ce_loss = nn.CrossEntropyLoss()
+
+        self.triplet_loss = initialise_loss(name=loss_name)
 
         # Training metrics
         self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
@@ -67,17 +71,8 @@ class ActionClassifier(pl.LightningModule):
         self.train_avg_per_class_acc(preds, y)
         self.train_per_class_acc.update(preds, y)
 
-        a_idx, p_idx, n_idx = self.triplet_miner(embeddings, y)
-        labels = torch.cat((y[a_idx], y[p_idx], y[n_idx]), dim=0)
-
-        triplet_loss = self.triplet_loss(
-            embeddings[a_idx],
-            embeddings[p_idx],
-            embeddings[n_idx],
-            labels,
-        )
-        ce_loss = self.ce_loss(preds, y)
-        loss = 0.01 * triplet_loss + ce_loss
+        miner_output = self.triplet_miner(embeddings, y)
+        loss = self.triplet_loss(embeddings, y, miner_output)
 
         return {"loss": loss}
 
@@ -122,6 +117,11 @@ class ActionClassifier(pl.LightningModule):
         self.val_avg_per_class_acc(preds, y)
         self.val_per_class_acc.update(preds, y)
 
+        miner_output = self.triplet_miner(embeddings, y)
+        loss = self.triplet_loss(embeddings, y, miner_output)
+        return {"loss": loss}
+
+    def _reciprocal_triplet_loss(self, embeddings, y):
         a_idx, p_idx, n_idx = self.triplet_miner(embeddings, y)
         labels = torch.cat((y[a_idx], y[p_idx], y[n_idx]), dim=0)
 
@@ -131,10 +131,14 @@ class ActionClassifier(pl.LightningModule):
             embeddings[n_idx],
             labels,
         )
-        ce_loss = self.ce_loss(preds, y)
-        loss = 0.01 * triplet_loss + ce_loss
+        return triplet_loss
 
-        return {"loss": loss}
+    def _ce_loss(self, preds, y):
+        ce_loss = self.ce_loss(preds, y)
+        return ce_loss
+
+    def _hybrid_loss(triplet_loss, ce_loss, tau=0.01):
+        return tau * triplet_loss + ce_loss
 
     def validation_epoch_end(self, outputs):
 
@@ -179,16 +183,20 @@ def main():
     data_module = SupervisedPanAfDataModule(cfg=cfg)
 
     data_type = cfg.get("dataset", "type")
+    miner_name = cfg.get("triplets", "miner")
     margin = cfg.getfloat("triplets", "margin")
     type_of_triplets = cfg.get("triplets", "type_of_triplets")
+    loss_name = cfg.get("triplets", "loss")
 
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
+        miner_name=miner_name,
         margin=margin,
         type_of_triplets=type_of_triplets,
+        loss_name=loss_name,
     )
     wand_logger = WandbLogger(offline=True)
 
@@ -239,7 +247,7 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=10,
+            fast_dev_run=2,
         )
     trainer.fit(model=model, datamodule=data_module)
 
