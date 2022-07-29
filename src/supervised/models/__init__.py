@@ -22,5 +22,5 @@ from .multi_stream import (
 )
 
 from .slowfast import SlowFast, SlowFastEmbedder
-from .triplet_models import DualStreamNetworkEmbeddingSoftmax
+from .triplet_models import DualStreamNetworkEmbeddingSoftmax, TripleStreamNetworkEmbeddingSoftmax
 from .mvit import MViT, MViTEmbedder

@@ -23,6 +23,9 @@ class ActionClassifier(pl.LightningModule):
         weight_decay,
         model_name,
         freeze_backbone,
+        embedding_size,
+        num_classes,
+        type_of_fusion,
         miner_name,
         margin,
         type_of_triplets,
@@ -33,7 +36,10 @@ class ActionClassifier(pl.LightningModule):
         self.save_hyperparameters()
 
         self.model = initialise_triplet_model(
-            name=model_name, freeze_backbone=freeze_backbone
+            name=model_name,
+            freeze_backbone=freeze_backbone,
+            embedding_size=embedding_size,
+            type_of_fusion=type_of_fusion,
         )
 
         self.classifier = KNeighborsClassifier(n_neighbors=9)
@@ -182,6 +188,10 @@ def main():
 
     data_module = SupervisedPanAfDataModule(cfg=cfg)
 
+    model_name = cfg.get("model", "name")
+    embedding_size = cfg.getint("model", "embedding_size")
+    type_of_fusion = cfg.get("model", "type_of_fusion")
+
     data_type = cfg.get("dataset", "type")
     miner_name = cfg.get("triplets", "miner")
     margin = cfg.getfloat("triplets", "margin")
@@ -193,6 +203,9 @@ def main():
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
         model_name=cfg.get("dataset", "type"),
         freeze_backbone=cfg.getboolean("hparams", "freeze_backbone"),
+        embedding_size=embedding_size,
+        type_of_fusion=type_of_fusion,
+        num_classes=9,
         miner_name=miner_name,
         margin=margin,
         type_of_triplets=type_of_triplets,

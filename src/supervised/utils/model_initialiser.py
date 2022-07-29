@@ -5,8 +5,8 @@ from src.supervised.models import (
     ThreeStreamNetworkSF,  # triple-stream
     # => triplet models <=
     SpatialStreamNetworkEmbedderSoftmax,
-    DualStreamNetworkEmbedderSoftmax,
-    ThreeStreamNetworkEmbedderSoftmax,
+    DualStreamNetworkEmbeddingSoftmax,
+    TripleStreamNetworkEmbeddingSoftmax,
     SlowFastEmbedder,
     MViT,
 )
@@ -36,18 +36,26 @@ def initialise_model(name, freeze_backbone, out_features=9):
     return model
 
 
-def initialise_triplet_model(name, freeze_backbone, out_features=9):
+def initialise_triplet_model(
+    name, freeze_backbone, embedding_size=128, num_classes=9, type_of_fusion=None
+):
     if name == "r":
         model = SpatialStreamNetworkEmbedderSoftmax(
-            freeze_backbone=freeze_backbone, out_features=out_features
+            freeze_backbone=freeze_backbone, out_features=num_classes
         )
     elif name == "rf":
-        model = DualStreamNetworkEmbedderSoftmax(
-            freeze_backbone=freeze_backbone, out_features=out_features
+        model = DualStreamNetworkEmbeddingSoftmax(
+            freeze_backbone=freeze_backbone,
+            embedding_size=embedding_size,
+            num_classes=num_classes,
+            type_of_fusion=type_of_fusion,
         )
     elif name == "rdf":
-        model = ThreeStreamNetworkEmbedderSoftmax(
-            freeze_backbone=freeze_backbone, out_features=out_features
+        model = TripleStreamNetworkEmbeddingSoftmax(
+            freeze_backbone=freeze_backbone,
+            embedding_size=embedding_size,
+            num_classes=num_classes,
+            type_of_fusion=type_of_fusion,
         )
     elif name == "slowfast_r50":
         model = SlowFastEmbedder(model_name=name)
