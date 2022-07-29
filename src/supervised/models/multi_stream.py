@@ -12,6 +12,7 @@ from .resnet50 import (
 # ====> Models for supervised training <====
 # ==========================================
 
+
 class ResNet50S(nn.Module):
     """
     Single stream network which output logits or softmax
@@ -20,7 +21,9 @@ class ResNet50S(nn.Module):
 
     def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
-        self.rgb_stream = ResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.rgb_stream = ResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_score = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -134,16 +137,19 @@ class ThreeStreamNetworkLF(nn.Module):
 # ======> Models for triplet loss <===========
 # ============================================
 
+
 class SpatialStreamNetworkEmbedderSoftmax(nn.Module):
     """
-    Single, spatial stream network that outputs a 128-dimensional 
+    Single, spatial stream network that outputs a 128-dimensional
     vector and logits.
     """
 
     def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.rgb_stream = SoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         emb, pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -153,7 +159,7 @@ class SpatialStreamNetworkEmbedderSoftmax(nn.Module):
 class DualStreamNetworkEmbedderSoftmax(nn.Module):
     """
     Dual stream network where each stream outputs
-    a 128-dimensional vector and logits. In the forward 
+    a 128-dimensional vector and logits. In the forward
     method both vector and logits are averaged over all
     streams.
     """
@@ -161,8 +167,12 @@ class DualStreamNetworkEmbedderSoftmax(nn.Module):
     def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
-        self.flow_stream = TemporalSoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.rgb_stream = SoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.flow_stream = TemporalSoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_emb, rgb_pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -176,7 +186,7 @@ class DualStreamNetworkEmbedderSoftmax(nn.Module):
 class ThreeStreamNetworkEmbedderSoftmax(nn.Module):
     """
     Three stream network where each stream outputs
-    a 128-dimensional vector and logits. In the forward 
+    a 128-dimensional vector and logits. In the forward
     method both vector and logits are averaged over all
     streams.
     """
@@ -184,9 +194,15 @@ class ThreeStreamNetworkEmbedderSoftmax(nn.Module):
     def __init__(self, freeze_backbone=False, out_features=9):
         super().__init__()
 
-        self.rgb_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
-        self.flow_stream = TemporalSoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
-        self.pose_stream = SoftmaxEmbedderResNet50(freeze_backbone=freeze_backbone, out_features=out_features)
+        self.rgb_stream = SoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.flow_stream = TemporalSoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
+        self.pose_stream = SoftmaxEmbedderResNet50(
+            freeze_backbone=freeze_backbone, out_features=out_features
+        )
 
     def forward(self, x):
         rgb_emb, rgb_pred = self.rgb_stream(x["spatial_sample"].permute(0, 2, 1, 3, 4))
@@ -194,5 +210,5 @@ class ThreeStreamNetworkEmbedderSoftmax(nn.Module):
         pose_emb, pose_pred = self.pose_stream(x["dense_sample"].permute(0, 2, 1, 3, 4))
 
         emb = (rgb_emb + flow_emb + pose_emb) / 3
-        pred = (rgb_pred + flow_pred + pose_pred ) / 3
+        pred = (rgb_pred + flow_pred + pose_pred) / 3
         return emb, pred
