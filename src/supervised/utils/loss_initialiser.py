@@ -3,7 +3,7 @@ from pytorch_metric_learning.losses import TripletMarginLoss, NTXentLoss
 
 def initialise_loss(name, temperature=1):
     if name == "triplet_margin":
-        loss = TripletMarginLoss()
+        loss = TripletMarginLoss(margin=1.0)
     elif name == "ntxent":
         loss = NTXentLoss(temperature=temperature)
     else:

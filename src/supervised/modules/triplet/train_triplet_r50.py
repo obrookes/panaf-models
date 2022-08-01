@@ -65,15 +65,20 @@ class ActionClassifier(pl.LightningModule):
         )
         self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
 
+        # Instantiate embeddings
+        self._reset_embeddings()
+
+    def _reset_embeddings(self):
+        # Embeddings/labels to be stored on the inference set
+        self.outputs_embedding = torch.zeros((1, self.hparams.embedding_size))
+        self.labels_embedding = torch.zeros((1))
+
     def forward(self, x):
         emb, pred = self.model(x)
         return emb, pred
 
     def on_train_epoch_start(self):
-
-        # Embeddings/labels to be stored on the inference set
-        self.outputs_embedding = torch.zeros((1, 128))
-        self.labels_embedding = torch.zeros((1))
+        self._reset_embeddings()
 
     def training_step(self, batch, batch_idx):
 
@@ -125,18 +130,28 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def on_validation_epoch_start(self):
-        if not self.trainer.sanity_checking:
-            self.classifier.fit(
-                self.outputs_embedding.detach().numpy(),
-                self.labels_embedding.detach().numpy(),
-            )
+
+        self.classifier.fit(
+            self.outputs_embedding[
+                1:,
+            ]
+            .detach()
+            .numpy(),
+            self.labels_embedding[
+                1:,
+            ]
+            .detach()
+            .numpy(),
+        )
 
     def validation_step(self, batch, batch_idx):
 
         x, y = batch
         embeddings, _ = self(x)
 
-        preds = torch.Tensor(self.classifier.predict_proba(embeddings.detach().numpy()))
+        preds = torch.Tensor(
+            self.classifier.predict_proba(embeddings.detach().cpu()), device=self.device
+        )
 
         self.val_top1_acc(preds, y)
         self.val_avg_per_class_acc(preds, y)
@@ -279,7 +294,8 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-            fast_dev_run=2,
+            replace_sampler_ddp=False,
+            fast_dev_run=5,
         )
     trainer.fit(model=model, datamodule=data_module)
 
