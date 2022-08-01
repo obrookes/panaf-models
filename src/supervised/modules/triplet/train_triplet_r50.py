@@ -3,6 +3,7 @@ import argparse
 import configparser
 import torchmetrics
 import pytorch_lightning as pl
+from torch import dist
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -80,9 +81,24 @@ class ActionClassifier(pl.LightningModule):
         miner_output = self.triplet_miner(embeddings, y)
         loss = self.triplet_loss(embeddings, y, miner_output)
 
-        return {"loss": loss}
+        return {"loss": loss, "embeddings": embeddings}
 
     def training_epoch_end(self, outputs):
+
+        embs = []
+
+        for i in range(len(outputs)):
+            embs.append(outputs[i]['embeddings'])
+        embs = torch.cat(embs)
+
+        gathered_tensor = [
+            torch.zeros_like(embs) for _ in range(torch.distributed.get_world_size())
+        ]
+
+        torch.distributed.all_gather(gathered_tensor, embs)
+        gathered_tensor = torch.cat(gathered_tensor, 0)
+
+        print(gathered_tensor.shape)
 
         # Log epoch acc
         self.log(
