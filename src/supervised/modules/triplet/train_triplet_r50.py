@@ -130,19 +130,24 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def on_validation_epoch_start(self):
-
-        self.classifier.fit(
-            self.outputs_embedding[
-                1:,
-            ]
-            .detach()
-            .numpy(),
-            self.labels_embedding[
-                1:,
-            ]
-            .detach()
-            .numpy(),
-        )
+        if self.trainer.sanity_checking:
+            self.classifier.fit(
+                self.outputs_embedding.detach().numpy(),
+                self.labels_embedding.detach().numpy(),
+            )
+        else:
+            self.classifier.fit(
+                self.outputs_embedding[
+                    1:,
+                ]
+                .detach()
+                .numpy(),
+                self.labels_embedding[
+                    1:,
+                ]
+                .detach()
+                .numpy(),
+            )
 
     def validation_step(self, batch, batch_idx):
 
