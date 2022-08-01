@@ -69,6 +69,12 @@ class ActionClassifier(pl.LightningModule):
         emb, pred = self.model(x)
         return emb, pred
 
+    def on_train_epoch_start(self):
+
+        # Embeddings/labels to be stored on the inference set
+        self.outputs_embedding = torch.zeros((1, 128))
+        self.labels_embedding = torch.zeros((1))
+
     def training_step(self, batch, batch_idx):
 
         x, y = batch
@@ -81,24 +87,12 @@ class ActionClassifier(pl.LightningModule):
         miner_output = self.triplet_miner(embeddings, y)
         loss = self.triplet_loss(embeddings, y, miner_output)
 
-        return {"loss": loss, "embeddings": embeddings}
+        self.outputs_embedding = torch.cat((self.outputs_embedding, embeddings), 0)
+        self.labels_embedding = torch.cat((self.labels_embedding, y), 0)
+
+        return {"loss": loss}
 
     def training_epoch_end(self, outputs):
-
-        embs = []
-
-        for i in range(len(outputs)):
-            embs.append(outputs[i]['embeddings'])
-        embs = torch.cat(embs)
-
-        gathered_tensor = [
-            torch.zeros_like(embs) for _ in range(torch.distributed.get_world_size())
-        ]
-
-        torch.distributed.all_gather(gathered_tensor, embs)
-        gathered_tensor = torch.cat(gathered_tensor, 0)
-
-        print(gathered_tensor.shape)
 
         # Log epoch acc
         self.log(
@@ -130,10 +124,19 @@ class ActionClassifier(pl.LightningModule):
             prog_bar=False,
         )
 
+    def on_validation_epoch_start(self):
+        if not self.trainer.sanity_checking:
+            self.classifier.fit(
+                self.outputs_embedding.detach().numpy(),
+                self.labels_embedding.detach().numpy(),
+            )
+
     def validation_step(self, batch, batch_idx):
 
         x, y = batch
-        embeddings, preds = self(x)
+        embeddings, _ = self(x)
+
+        preds = torch.Tensor(self.classifier.predict_proba(embeddings.detach().numpy()))
 
         self.val_top1_acc(preds, y)
         self.val_avg_per_class_acc(preds, y)
