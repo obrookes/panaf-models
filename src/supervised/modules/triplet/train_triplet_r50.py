@@ -92,32 +92,21 @@ class ActionClassifier(pl.LightningModule):
         miner_output = self.triplet_miner(embeddings, y)
         loss = self.triplet_loss(embeddings, y, miner_output)
 
-        self.outputs_embedding = torch.cat((self.outputs_embedding, embeddings), 0)
-        self.labels_embedding = torch.cat((self.labels_embedding, y), 0)
-
-        return {"loss": loss}
+        return {"loss": loss, "embeddings": embeddings, "labels": y}
 
     def training_epoch_end(self, outputs):
+        embs, labels = [], []
+        for i in range(len(outputs)):
+            embs.append(outputs[i]["embeddings"])
+            labels.append(outputs[i]["labels"])
 
-        # Log epoch acc
-        self.log(
-            "train_top1_acc",
-            self.train_top1_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        embs = torch.cat(embs)
+        labels = torch.cat(labels)
 
-        # Log epoch acc
-        self.log(
-            "train_avg_per_class_acc",
-            self.train_avg_per_class_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
+        embs = self._gather_tensors(embs)
+        labels = self._gather_tensors(labels)
+
+        print(f"Gathered shape: {embs.shape}")
 
         loss = torch.stack([x["loss"] for x in outputs]).mean()
         self.log(
@@ -130,41 +119,43 @@ class ActionClassifier(pl.LightningModule):
         )
 
     def on_validation_epoch_start(self):
-        if self.trainer.sanity_checking:
-            self.classifier.fit(
-                self.outputs_embedding.detach().numpy(),
-                self.labels_embedding.detach().numpy(),
-            )
-        else:
-            self.classifier.fit(
-                self.outputs_embedding[
-                    1:,
-                ]
-                .detach()
-                .numpy(),
-                self.labels_embedding[
-                    1:,
-                ]
-                .detach()
-                .numpy(),
-            )
+        # Embeddings/labels to be stored on the inference set
+        self.val_embeddings = torch.zeros((1, self.hparams.embedding_size))
+        self.val_labels = torch.zeros((1))
 
     def validation_step(self, batch, batch_idx):
 
         x, y = batch
-        embeddings, _ = self(x)
-
-        preds = torch.Tensor(
-            self.classifier.predict_proba(embeddings.detach().cpu()), device=self.device
-        )
-
-        self.val_top1_acc(preds, y)
-        self.val_avg_per_class_acc(preds, y)
-        self.val_per_class_acc.update(preds, y)
-
+        embeddings, preds = self(x)
         miner_output = self.triplet_miner(embeddings, y)
         loss = self.triplet_loss(embeddings, y, miner_output)
-        return {"loss": loss}
+
+        return {"loss": loss, "embeddings": embeddings, "labels": y}
+
+    def validation_epoch_end(self, outputs):
+        embs, labels = [], []
+        for i in range(len(outputs)):
+            embs.append(outputs[i]["embeddings"])
+            labels.append(outputs[i]["labels"])
+
+        embs = torch.cat(embs)
+        labels = torch.cat(labels)
+
+        embs = self._gather_tensors(embs)
+        labels = self._gather_tensors(labels)
+
+        print(f"Gathered shape: {embs.shape}")
+
+    def _gather_tensors(self, tensor):
+
+        gathered_tensor = [
+            torch.zeros_like(tensor) for _ in range(torch.distributed.get_world_size())
+        ]
+
+        torch.distributed.all_gather(gathered_tensor, tensor)
+        gathered_tensor = torch.cat(gathered_tensor, 0)
+
+        return gathered_tensor
 
     def _reciprocal_triplet_loss(self, embeddings, y):
         a_idx, p_idx, n_idx = self.triplet_miner(embeddings, y)
@@ -184,28 +175,6 @@ class ActionClassifier(pl.LightningModule):
 
     def _hybrid_loss(triplet_loss, ce_loss, tau=0.01):
         return tau * triplet_loss + ce_loss
-
-    def validation_epoch_end(self, outputs):
-
-        # Log top-1 acc per epoch
-        self.log(
-            "val_top1_acc",
-            self.val_top1_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
-
-        # Log per class acc per epoch
-        self.log(
-            "val_avg_per_class_acc",
-            self.val_avg_per_class_acc,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=True,
-        )
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -300,7 +269,7 @@ def main():
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
             replace_sampler_ddp=False,
-            fast_dev_run=5,
+            fast_dev_run=2,
         )
     trainer.fit(model=model, datamodule=data_module)
 
