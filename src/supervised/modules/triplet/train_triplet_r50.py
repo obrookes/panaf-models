@@ -66,23 +66,18 @@ class ActionClassifier(pl.LightningModule):
 
     def training_epoch_end(self, outputs):
 
-        if self.trainer.is_global_zero:
-            embs = torch.cat([x["embeddings"] for x in outputs])
-            labels = torch.cat([x["labels"] for x in outputs])
+        embs = torch.cat([x["embeddings"] for x in outputs])
+        labels = torch.cat([x["labels"] for x in outputs])
 
-            self.train_embeddings = self._gather_tensors(embs)
-            self.train_labels = self._gather_tensors(labels)
+        self.train_embeddings = self._gather_tensors(embs)
+        self.train_labels = self._gather_tensors(labels)
 
-            self.classifier.fit(
-                self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
-            )
-            preds = self.classifier.predict_proba(
-                self.validation_embeddings.detach().cpu()
-            )
-            acc = accuracy(
-                torch.tensor(preds, device=self.device), self.validation_labels
-            )
-            self.log("val_acc", acc, prog_bar=True, rank_zero_only=True)
+        self.classifier.fit(
+            self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
+        )
+        preds = self.classifier.predict_proba(self.validation_embeddings.detach().cpu())
+        acc = accuracy(torch.tensor(preds, device=self.device), self.validation_labels)
+        self.log("val_acc", acc, prog_bar=True, rank_zero_only=True)
 
     def validation_step(self, batch, batch_idx):
 
@@ -95,13 +90,11 @@ class ActionClassifier(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
 
-        if self.trainer.is_global_zero:
+        embs = torch.cat([x["embeddings"] for x in outputs])
+        labels = torch.cat([x["labels"] for x in outputs])
 
-            embs = torch.cat([x["embeddings"] for x in outputs])
-            labels = torch.cat([x["labels"] for x in outputs])
-
-            self.validation_embeddings = self._gather_tensors(embs)
-            self.validation_labels = self._gather_tensors(labels)
+        self.validation_embeddings = self._gather_tensors(embs)
+        self.validation_labels = self._gather_tensors(labels)
 
     def _gather_tensors(self, tensor):
 
