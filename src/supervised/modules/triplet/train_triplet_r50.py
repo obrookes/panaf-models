@@ -2,8 +2,8 @@ import torch
 import argparse
 import configparser
 import torchmetrics
+from torchmetrics.functional import accuracy
 import pytorch_lightning as pl
-from torch import dist
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from panaf.datamodules import SupervisedPanAfDataModule
@@ -51,77 +51,38 @@ class ActionClassifier(pl.LightningModule):
 
         self.triplet_loss = initialise_loss(name=loss_name)
 
-        # Training metrics
-        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
-        self.train_avg_per_class_acc = torchmetrics.Accuracy(
-            num_classes=9, average="macro"
-        )
-        self.train_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
-
-        # Validation metrics
-        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
-        self.val_avg_per_class_acc = torchmetrics.Accuracy(
-            num_classes=9, average="macro"
-        )
-        self.val_per_class_acc = torchmetrics.Accuracy(num_classes=9, average="none")
-
-        # Instantiate embeddings
-        self._reset_embeddings()
-
-    def _reset_embeddings(self):
-        # Embeddings/labels to be stored on the inference set
-        self.outputs_embedding = torch.zeros((1, self.hparams.embedding_size))
-        self.labels_embedding = torch.zeros((1))
-
     def forward(self, x):
         emb, pred = self.model(x)
         return emb, pred
-
-    def on_train_epoch_start(self):
-        self._reset_embeddings()
 
     def training_step(self, batch, batch_idx):
 
         x, y = batch
         embeddings, preds = self(x)
-
-        self.train_top1_acc(preds, y)
-        self.train_avg_per_class_acc(preds, y)
-        self.train_per_class_acc.update(preds, y)
-
         miner_output = self.triplet_miner(embeddings, y)
         loss = self.triplet_loss(embeddings, y, miner_output)
 
         return {"loss": loss, "embeddings": embeddings, "labels": y}
 
     def training_epoch_end(self, outputs):
-        embs, labels = [], []
-        for i in range(len(outputs)):
-            embs.append(outputs[i]["embeddings"])
-            labels.append(outputs[i]["labels"])
 
-        embs = torch.cat(embs)
-        labels = torch.cat(labels)
+        if self.trainer.is_global_zero:
+            embs = torch.cat([x["embeddings"] for x in outputs])
+            labels = torch.cat([x["labels"] for x in outputs])
 
-        embs = self._gather_tensors(embs)
-        labels = self._gather_tensors(labels)
+            self.train_embeddings = self._gather_tensors(embs)
+            self.train_labels = self._gather_tensors(labels)
 
-        print(f"Gathered shape: {embs.shape}")
-
-        loss = torch.stack([x["loss"] for x in outputs]).mean()
-        self.log(
-            "train_loss",
-            loss,
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            prog_bar=False,
-        )
-
-    def on_validation_epoch_start(self):
-        # Embeddings/labels to be stored on the inference set
-        self.val_embeddings = torch.zeros((1, self.hparams.embedding_size))
-        self.val_labels = torch.zeros((1))
+            self.classifier.fit(
+                self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
+            )
+            preds = self.classifier.predict_proba(
+                self.validation_embeddings.detach().cpu()
+            )
+            acc = accuracy(
+                torch.tensor(preds, device=self.device), self.validation_labels
+            )
+            self.log("val_acc", acc, prog_bar=True, rank_zero_only=True)
 
     def validation_step(self, batch, batch_idx):
 
@@ -133,18 +94,14 @@ class ActionClassifier(pl.LightningModule):
         return {"loss": loss, "embeddings": embeddings, "labels": y}
 
     def validation_epoch_end(self, outputs):
-        embs, labels = [], []
-        for i in range(len(outputs)):
-            embs.append(outputs[i]["embeddings"])
-            labels.append(outputs[i]["labels"])
 
-        embs = torch.cat(embs)
-        labels = torch.cat(labels)
+        if self.trainer.is_global_zero:
 
-        embs = self._gather_tensors(embs)
-        labels = self._gather_tensors(labels)
+            embs = torch.cat([x["embeddings"] for x in outputs])
+            labels = torch.cat([x["labels"] for x in outputs])
 
-        print(f"Gathered shape: {embs.shape}")
+            self.validation_embeddings = self._gather_tensors(embs)
+            self.validation_labels = self._gather_tensors(labels)
 
     def _gather_tensors(self, tensor):
 
@@ -244,11 +201,6 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
-                callbacks=[
-                    val_top1_acc_checkpoint_callback,
-                    val_per_class_acc_checkpoint_callback,
-                    per_class_acc_callback,
-                ],
                 logger=wand_logger,
             )
         else:
