@@ -1,9 +1,11 @@
-from pytorch_metric_learning.miners import TripletMarginMiner, BatchEasyHardMiner
+from pytorch_metric_learning.miners import TripletMarginMiner, BatchEasyHardMiner, BatchHardMiner
 
 
-def initialise_miner(name, margin=0.2, type_of_triplets='easy'):
+def initialise_miner(name, miner_margin=0.2, type_of_triplets='easy'):
     if name == "triplet_margin_miner":
-        miner = TripletMarginMiner(margin=margin, type_of_triplets=type_of_triplets)
+        miner = TripletMarginMiner(margin=miner_margin, type_of_triplets=type_of_triplets)
+    if name == "batch_hard_miner":
+        miner = BatchHardMiner()
     elif name == "batch_easy_hard_miner":
         miner = BatchEasyHardMiner()
     else:

@@ -27,9 +27,10 @@ class ActionClassifier(pl.LightningModule):
         num_classes,
         type_of_fusion,
         miner_name,
-        margin,
+        miner_margin,
         type_of_triplets,
         loss_name,
+        loss_margin,
     ):
         super().__init__()
 
@@ -45,10 +46,12 @@ class ActionClassifier(pl.LightningModule):
         self.classifier = KNeighborsClassifier(n_neighbors=9)
 
         self.triplet_miner = initialise_miner(
-            name=miner_name, margin=margin, type_of_triplets=type_of_triplets
+            name=miner_name,
+            miner_margin=miner_margin,
+            type_of_triplets=type_of_triplets,
         )
 
-        self.triplet_loss = initialise_loss(name=loss_name)
+        self.triplet_loss = initialise_loss(name=loss_name, loss_margin=loss_margin)
 
         # Training metrics
         self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
@@ -127,47 +130,45 @@ class ActionClassifier(pl.LightningModule):
 
     def training_epoch_end(self, outputs):
 
-        if self.trainer.is_global_zero:
+        embs = torch.cat([x["embeddings"] for x in outputs])
+        labels = torch.cat([x["labels"] for x in outputs])
 
-            embs = torch.cat([x["embeddings"] for x in outputs])
-            labels = torch.cat([x["labels"] for x in outputs])
+        self.train_embeddings = self._gather_tensors(embs)
+        self.train_labels = self._gather_tensors(labels)
 
-            self.train_embeddings = self._gather_tensors(embs)
-            self.train_labels = self._gather_tensors(labels)
+        self.classifier.fit(
+            self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
+        )
+        train_preds = self.classifier.predict_proba(
+            self.train_embeddings.detach().cpu()
+        )
+        val_preds = self.classifier.predict_proba(
+            self.validation_embeddings.detach().cpu()
+        )
 
-            self.classifier.fit(
-                self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
-            )
-            train_preds = self.classifier.predict_proba(
-                self.train_embeddings.detach().cpu()
-            )
-            val_preds = self.classifier.predict_proba(
-                self.validation_embeddings.detach().cpu()
-            )
+        # Training metrics and logs
+        self.train_top1_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.train_avg_per_class_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.train_per_class_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.log_train_metrics()
 
-            # Training metrics and logs
-            self.train_top1_acc(
-                torch.tensor(train_preds, device=self.device), self.train_labels
-            )
-            self.train_avg_per_class_acc(
-                torch.tensor(train_preds, device=self.device), self.train_labels
-            )
-            self.train_per_class_acc(
-                torch.tensor(train_preds, device=self.device), self.train_labels
-            )
-            self.log_train_metrics()
-
-            # Validation metrics and logs
-            self.val_top1_acc(
-                torch.tensor(val_preds, device=self.device), self.validation_labels
-            )
-            self.val_avg_per_class_acc(
-                torch.tensor(val_preds, device=self.device), self.validation_labels
-            )
-            self.val_per_class_acc(
-                torch.tensor(val_preds, device=self.device), self.validation_labels
-            )
-            self.log_val_metrics()
+        # Validation metrics and logs
+        self.val_top1_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.val_avg_per_class_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.val_per_class_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.log_val_metrics()
 
     def validation_step(self, batch, batch_idx):
 
@@ -179,12 +180,11 @@ class ActionClassifier(pl.LightningModule):
         return {"loss": loss, "embeddings": embeddings, "labels": y}
 
     def validation_epoch_end(self, outputs):
-        if self.trainer.is_global_zero:
-            embs = torch.cat([x["embeddings"] for x in outputs])
-            labels = torch.cat([x["labels"] for x in outputs])
+        embs = torch.cat([x["embeddings"] for x in outputs])
+        labels = torch.cat([x["labels"] for x in outputs])
 
-            self.validation_embeddings = self._gather_tensors(embs)
-            self.validation_labels = self._gather_tensors(labels)
+        self.validation_embeddings = self._gather_tensors(embs)
+        self.validation_labels = self._gather_tensors(labels)
 
     def _gather_tensors(self, tensor):
 
@@ -242,9 +242,10 @@ def main():
 
     data_type = cfg.get("dataset", "type")
     miner_name = cfg.get("triplets", "miner")
-    margin = cfg.getfloat("triplets", "margin")
+    miner_margin = cfg.getfloat("triplets", "miner_margin")
     type_of_triplets = cfg.get("triplets", "type_of_triplets")
     loss_name = cfg.get("triplets", "loss")
+    loss_margin = cfg.getfloat("triplets", "loss_margin")
 
     batch_size = cfg.getint("loader", "batch_size")
 
@@ -257,9 +258,10 @@ def main():
         type_of_fusion=type_of_fusion,
         num_classes=9,
         miner_name=miner_name,
-        margin=margin,
+        miner_margin=miner_margin,
         type_of_triplets=type_of_triplets,
         loss_name=loss_name,
+        loss_margin=loss_margin,
     )
     wand_logger = WandbLogger(offline=True)
 
