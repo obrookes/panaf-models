@@ -49,9 +49,16 @@ class PerClassAccuracy(Callback):
         train_per_class_acc = self.per_class_dict(
             pl_module.train_per_class_acc.compute()
         )
-        pl_module.log("train_per_class_acc", train_per_class_acc, on_epoch=True)
+        pl_module.log(
+            "train_per_class_acc",
+            train_per_class_acc,
+            on_epoch=True,
+            rank_zero_only=True,
+        )
         pl_module.train_per_class_acc.reset()
 
         val_per_class_acc = self.per_class_dict(pl_module.val_per_class_acc.compute())
-        pl_module.log("val_per_class_acc", val_per_class_acc, on_epoch=True)
+        pl_module.log(
+            "val_per_class_acc", val_per_class_acc, on_epoch=True, rank_zero_only=True
+        )
         pl_module.val_per_class_acc.reset()
