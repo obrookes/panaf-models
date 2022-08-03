@@ -2,7 +2,6 @@ import torch
 import argparse
 import configparser
 import torchmetrics
-from torchmetrics.functional import accuracy
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -11,7 +10,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from src.supervised.utils.model_initialiser import initialise_triplet_model
 from src.supervised.utils.miner_initialiser import initialise_miner
 from src.supervised.utils.loss_initialiser import initialise_loss
-from src.supervised.callbacks.custom_metrics import PerClassAccuracy
+from src.supervised.callbacks.triplet_custom_metrics import PerClassAccuracy
 from configparser import NoOptionError
 
 # from losses import OnlineReciprocalTripletLoss
@@ -51,6 +50,24 @@ class ActionClassifier(pl.LightningModule):
 
         self.triplet_loss = initialise_loss(name=loss_name)
 
+        # Training metrics
+        self.train_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.train_avg_per_class_acc = torchmetrics.Accuracy(
+            num_classes=num_classes, average="macro"
+        )
+        self.train_per_class_acc = torchmetrics.Accuracy(
+            num_classes=num_classes, average="none"
+        )
+
+        # Validation metrics
+        self.val_top1_acc = torchmetrics.Accuracy(top_k=1)
+        self.val_avg_per_class_acc = torchmetrics.Accuracy(
+            num_classes=9, average="macro"
+        )
+        self.val_per_class_acc = torchmetrics.Accuracy(
+            num_classes=num_classes, average="none"
+        )
+
     def forward(self, x):
         emb, pred = self.model(x)
         return emb, pred
@@ -64,6 +81,50 @@ class ActionClassifier(pl.LightningModule):
 
         return {"loss": loss, "embeddings": embeddings, "labels": y}
 
+    def log_train_metrics(self):
+
+        self.log(
+            "train_top1_acc",
+            self.train_top1_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+            rank_zero_only=True,
+        )
+
+        self.log(
+            "train_avg_per_class_acc",
+            self.train_avg_per_class_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+            rank_zero_only=True,
+        )
+
+    def log_val_metrics(self):
+
+        self.log(
+            "val_top1_acc",
+            self.val_top1_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+            rank_zero_only=True,
+        )
+
+        self.log(
+            "val_avg_per_class_acc",
+            self.val_avg_per_class_acc,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            prog_bar=True,
+            rank_zero_only=True,
+        )
+
     def training_epoch_end(self, outputs):
 
         embs = torch.cat([x["embeddings"] for x in outputs])
@@ -75,9 +136,36 @@ class ActionClassifier(pl.LightningModule):
         self.classifier.fit(
             self.train_embeddings.detach().cpu(), self.train_labels.detach().cpu()
         )
-        preds = self.classifier.predict_proba(self.validation_embeddings.detach().cpu())
-        acc = accuracy(torch.tensor(preds, device=self.device), self.validation_labels)
-        self.log("val_acc", acc, prog_bar=True, rank_zero_only=True)
+        train_preds = self.classifier.predict_proba(
+            self.train_embeddings.detach().cpu()
+        )
+        val_preds = self.classifier.predict_proba(
+            self.validation_embeddings.detach().cpu()
+        )
+
+        # Training metrics and logs
+        self.train_top1_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.train_avg_per_class_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.train_per_class_acc(
+            torch.tensor(train_preds, device=self.device), self.train_labels
+        )
+        self.log_train_metrics()
+
+        # Validation metrics and logs
+        self.val_top1_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.val_avg_per_class_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.val_per_class_acc(
+            torch.tensor(val_preds, device=self.device), self.validation_labels
+        )
+        self.log_val_metrics()
 
     def validation_step(self, batch, batch_idx):
 
@@ -156,6 +244,8 @@ def main():
     type_of_triplets = cfg.get("triplets", "type_of_triplets")
     loss_name = cfg.get("triplets", "loss")
 
+    batch_size = cfg.getint("loader", "batch_size")
+
     model = ActionClassifier(
         lr=cfg.getfloat("hparams", "lr"),
         weight_decay=cfg.getfloat("hparams", "weight_decay"),
@@ -175,13 +265,13 @@ def main():
     per_class_acc_callback = PerClassAccuracy(which_classes=which_classes)
 
     val_top1_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath=f"checkpoints/val_top1_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        dirpath=f"checkpoints/val_top1_acc/{data_type}_{batch_size}_{embedding_size}_{miner_name}_{type_of_fusion}_{loss_name}",
         monitor="val_top1_acc",
         mode="max",
     )
 
     val_per_class_acc_checkpoint_callback = ModelCheckpoint(
-        dirpath=f"checkpoints/val_per_class_acc/type={data_type}_margin={margin}_triplets={type_of_triplets}",
+        dirpath=f"checkpoints/val_per_class_acc/{data_type}_{batch_size}_{embedding_size}_{miner_name}_{type_of_fusion}_{loss_name}",
         monitor="val_avg_per_class_acc",
         mode="max",
     )
@@ -194,6 +284,11 @@ def main():
                 strategy=cfg.get("trainer", "strategy"),
                 max_epochs=cfg.getint("trainer", "max_epochs"),
                 stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+                callbacks=[
+                    per_class_acc_callback,
+                    val_top1_acc_checkpoint_callback,
+                    val_per_class_acc_checkpoint_callback,
+                ],
                 logger=wand_logger,
             )
         else:
@@ -213,8 +308,13 @@ def main():
             strategy=cfg.get("trainer", "strategy"),
             max_epochs=cfg.getint("trainer", "max_epochs"),
             stochastic_weight_avg=cfg.getboolean("trainer", "swa"),
+            callbacks=[
+                per_class_acc_callback,
+                val_top1_acc_checkpoint_callback,
+                val_per_class_acc_checkpoint_callback,
+            ],
             replace_sampler_ddp=False,
-            fast_dev_run=2,
+            fast_dev_run=1,
         )
     trainer.fit(model=model, datamodule=data_module)
 
